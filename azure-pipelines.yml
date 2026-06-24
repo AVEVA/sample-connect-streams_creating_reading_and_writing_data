@@ -1,0 +1,60 @@
+trigger:
+  batch: true
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+schedules:
+  - cron: '0 0 * * 0'
+    displayName: Weekly build
+    branches:
+      include:
+        - main
+    always: true
+
+resources:
+  repositories:
+    - repository: OpsGuildAutomationRepo
+      type: git
+      name: DevOps/opsguild.automation
+      ref: refs/heads/main
+    - repository: templates
+      type: github
+      name: AVEVA/AVEVA-Samples
+      endpoint: AVEVA
+
+variables:
+  - name: analysisProject
+    value: REPLACE_WITH_SAMPLE_NAME #TODO Replace placeholder.
+
+parameters:
+  - name: pool
+    default: DevOps Managed Containers Build
+  - name: containerDemands
+    type: object
+    default: ['Agent.OS -equals Linux'] #TODO Check container demands.
+
+jobs:
+  - job: Tests
+    condition: ne(variables['Build.Reason'], 'Schedule')
+    pool:
+      name: ${{ parameters.pool }}
+      demands: ${{ parameters.containerDemands }}
+    steps:
+      - template: '/miscellaneous/build_templates/appsettings.yml@templates'
+        parameters:
+          secrets: 'TenantId, NamespaceId, CommunityId, ClientId, ClientSecret, Resource'
+
+      #TODO Add steps to run sample tests.
+
+  #TODO Static code analysis should be run by any sample that can.
+  #If the language your sample is written in not supported by polaris and blackduck, you may remove this job and OpsGuildAutomationRepo repository above.
+  #Example: Power Query is not supported so those samples do not have a code analysis step.
+  - template: '/miscellaneous/build_templates/code-analysis.yml@templates'
+    parameters:
+      useRequirementsTxt: true

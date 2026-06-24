@@ -1,0 +1,7 @@
+# TODO: Add language specific gitignore from https://github.com/github/gitignore
+
+# Credential Config Files
+# NOTE: DO NOT REMOVE
+product-readiness.*
+config.ini
+appsettings.json
