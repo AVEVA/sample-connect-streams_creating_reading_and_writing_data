@@ -1,0 +1,67 @@
+{
+  "id": "TimeIndexed.Double",
+  "name": "TimeIndexed Double",
+  "description": "",
+  "sdsTypeCode": "Object",
+  "isGenericType": false,
+  "isReferenceType": false,
+  "genericArguments": null,
+  "properties": [
+    {
+      "id": "Timestamp",
+      "name": "Timestamp",
+      "description": "",
+      "order": 0,
+      "isKey": true,
+      "fixedSize": 0,
+      "sdsType": {
+        "id": "TimeIndexed.Double.Timestamp",
+        "name": "TimeIndexed.Double.Timestamp",
+        "description": "",
+        "sdsTypeCode": "DateTime",
+        "isGenericType": false,
+        "isReferenceType": false,
+        "genericArguments": null,
+        "properties": null,
+        "baseType": null,
+        "derivedTypes": null,
+        "interpolationMode": "Continuous",
+        "extrapolationMode": "Forward"
+      },
+      "value": null,
+      "uom": null,
+      "interpolationMode": null,
+      "isQuality": false
+    },
+    {
+      "id": "Value",
+      "name": "Value",
+      "description": "",
+      "order": 0,
+      "isKey": false,
+      "fixedSize": 0,
+      "sdsType": {
+        "id": "TimeIndexed.Double.Value",
+        "name": "TimeIndexed.Double.Value",
+        "description": "",
+        "sdsTypeCode": "Double",
+        "isGenericType": false,
+        "isReferenceType": false,
+        "genericArguments": null,
+        "properties": null,
+        "baseType": null,
+        "derivedTypes": null,
+        "interpolationMode": "Continuous",
+        "extrapolationMode": "Forward"
+      },
+      "value": null,
+      "uom": null,
+      "interpolationMode": null,
+      "isQuality": false
+    }
+  ],
+  "baseType": null,
+  "derivedTypes": null,
+  "interpolationMode": "Continuous",
+  "extrapolationMode": "Forward"
+}

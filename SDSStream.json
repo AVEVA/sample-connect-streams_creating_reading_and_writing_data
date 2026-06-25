@@ -1,0 +1,11 @@
+{
+  "id": "Random",
+  "name": "Random",
+  "description": "Created by sample-connect-streams_creating_reading_and_writing_data",
+  "typeId": "TimeIndexed.Double",
+  "indexes": null,
+  "interpolationMode": null,
+  "extrapolationMode": null,
+  "propertyOverrides": null,
+  "securityTags": null
+}
