@@ -1,6 +1,6 @@
 {
-  "id": "Random",
-  "name": "Random",
+  "id": "Random_2",
+  "name": "Random_2",
   "description": "Created by sample-connect-streams_creating_reading_and_writing_data",
   "typeId": "TimeIndexed.Double",
   "indexes": null,

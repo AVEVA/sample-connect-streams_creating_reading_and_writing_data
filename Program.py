@@ -10,10 +10,11 @@ import random
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 
 DEFAULT_SETTINGS_PATH = Path(__file__).with_name("appsettings.json")
 DATA_BACKFILL_START_TIME = "2026-06-24T00:00:00Z"
-DATA_BACKFILL_END_TIME = "2026-06-25T00:00:00Z"
+DATA_BACKFILL_END_TIME = "2026-06-29T00:00:00Z"
 DATA_BACKFILL_INTERVAL = "01:00:00"
 DATA_READ_FILTER = ""
 DATA_READ_COUNT = 1000
@@ -51,6 +52,32 @@ def _parse_hms_interval_to_timedelta(value: str) -> timedelta:
     if interval <= timedelta(0):
         raise ValueError("interval must be greater than zero")
     return interval
+
+
+def calculate_interval_count(start_iso: str, end_iso: str, interval: str) -> int:
+    """
+    Calculate the number of intervals that fit within a time range.
+    
+    Args:
+        start_iso: Start time in ISO 8601 format (e.g., "2026-06-24T00:00:00Z")
+        end_iso: End time in ISO 8601 format (e.g., "2026-06-25T00:00:00Z")
+        interval: Time interval in H:MM:SS format (e.g., "01:00:00")
+    
+    Returns:
+        Number of intervals between start and end times (inclusive)
+    """
+    start = _parse_iso_datetime(start_iso.strip())
+    end = _parse_iso_datetime(end_iso.strip())
+    if start > end:
+        raise ValueError("time_range_iso start must be less than or equal to end")
+    
+    step = _parse_hms_interval_to_timedelta(interval)
+    time_range = end - start
+    
+    # Calculate the number of intervals (add 1 to include both start and end)
+    interval_count = int(time_range / step) + 1
+    
+    return interval_count
 
 
 def build_timeseries_data(start_iso: str, end_iso: str, interval: str) -> list[dict[str, Any]]:
@@ -180,18 +207,47 @@ def get_access_token(
     return access_token
 
 
-def get(access_token: str, url: str) -> None:
+def getData(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
+
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
 
-    try:
-        response = requests.get(url, headers=headers, timeout=30)
-    except requests.RequestException as exc:
-        fail("GET request failed.", exc)
+    all_items = []
+    continuation_token = None
     
-    return response.json()
+    while True:
+        # Build URL with continuation token and count parameters if needed
+        request_url = url
+        if continuation_token:
+            separator = "&" if "?" in request_url else "?"
+            request_url = f"{request_url}{separator}continuationToken={continuation_token}&count={count}"
+        elif "?" not in request_url:
+            # Add count parameter to initial request
+            request_url = f"{request_url}?count={count}"
+        else:
+            # URL already has parameters, append count
+            request_url = f"{request_url}&count={count}"
+
+        try:
+            response = requests.get(request_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            response_data = response.json()
+        except requests.RequestException as exc:
+            fail("GET request failed.", exc)
+        
+        # Append items from this page
+        if "items" in response_data:
+            all_items.extend(response_data["items"])
+        
+        # Check for continuation token
+        continuation_token = response_data.get("continuationToken")
+        if not continuation_token:
+            # No more pages, return combined results
+            return {"items": all_items}
+        
+        # Continue to next page
 
 def post(access_token: str, url: str, body: Any) -> None:
     headers = {
@@ -225,14 +281,23 @@ def plot(data):
     # 1. Convert data to dataframe
     df = pd.DataFrame(data)
 
-    # 2. Set the visual style 
+    # 2. Convert timestamp column to datetime
+    for timestamp_col in ['Timestamp', 'timestamp']:
+        if timestamp_col in df.columns:
+            df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+
+    # 3. Set the visual style 
     sns.set_theme(style="whitegrid")
 
-    # 3. Plot multiple lines automatically using 'hue'
-    sns.lineplot(data=df, x='timestamp', y='value', marker='o')
+    # 4. Plot multiple lines automatically using 'hue'
+    ax = sns.lineplot(data=df, x='timestamp', y='value', marker='o')
 
-    # 4. Display the chart
-    plt.title("Product Performance Comparison")
+    # 5. Format x-axis to show mm-dd format every day
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
+    plt.gcf().autofmt_xdate() # Automatically rotates the dates for readability
+
+    # 6. Display the chart
     plt.show()
 
 if __name__ == "__main__":
@@ -256,26 +321,33 @@ if __name__ == "__main__":
     post(token, f"{runtime_settings["sds_url"]}/Types/{sds_type_id}", sds_type_body)
     print("Sds type created or updated")
 
-    # get sds stream definition and send to CONNECT
-    sds_stream_body = load_settings(Path(__file__).with_name("SDSStream.json"))
-    sds_stream_id = sds_stream_body["id"]
-    post(token, f"{runtime_settings["sds_url"]}/Streams/{sds_stream_id}", sds_stream_body)
+    # get sds stream 1 definition and send to CONNECT
+    sds_stream_body_1 = load_settings(Path(__file__).with_name("SDSStream1.json"))
+    sds_stream_id_1 = sds_stream_body_1["id"]
+    post(token, f"{runtime_settings["sds_url"]}/Streams/{sds_stream_id_1}", sds_stream_body_1)
     print("Sds stream created or updated")
 
-    # backfill data into stream
-    data = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
-    put(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id}/Data", data)
-    print("Data backfilled to stream")
+    # get sds stream 2 definition and send to CONNECT
+    sds_stream_body_2 = load_settings(Path(__file__).with_name("SDSStream2.json"))
+    sds_stream_id_2 = sds_stream_body_2["id"]
+    post(token, f"{runtime_settings["sds_url"]}/Streams/{sds_stream_id_2}", sds_stream_body_2)
+    print("Sds stream created or updated")
 
-    # read raw data in time window
-    raw_data = get(
+    # backfill data into streams
+    data_1 = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
+    put(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_1}/Data", data_1)
+    data_2 = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
+    put(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_2}/Data", data_2)
+    print("Data backfilled to streams")
+
+    # read and plot stored data for singular stream in time window
+    raw_data = getData(
         token,
         (
-            f"{runtime_settings['sds_url']}/Streams/{sds_stream_id}/Data/Window"
+            f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_1}/Data/Window"
             f"?startIndex={DATA_BACKFILL_START_TIME}"
             f"&endIndex={DATA_BACKFILL_END_TIME}"
             f"&filter={DATA_READ_FILTER}"
-            f"&count={DATA_READ_COUNT}"
             f"&boundaryType={DATA_READ_BOUNDARY_TYPE}"
             f"&startBoundaryType={DATA_READ_START_BOUNDARY_TYPE}"
             f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
@@ -283,7 +355,25 @@ if __name__ == "__main__":
     )
     plot(raw_data["items"])
 
-    
+    # read and plot stored data for streams in bulk in time window
+    body_bulk = {"ids": [sds_stream_id_1, sds_stream_id_2]}
+    intervals_bulk = calculate_interval_count(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
+    bulk_data = post(
+        token,
+        (
+            f"{runtime_settings['sds_url']}/Bulk/Streams/Data/Sampled"
+            f"?startIndex={DATA_BACKFILL_START_TIME}"
+            f"&endIndex={DATA_BACKFILL_END_TIME}"
+            f"&intervals={intervals_bulk}"
+            f"&sampleBy=value"
+            f"&filter={DATA_READ_FILTER}"
+            f"&boundaryType={DATA_READ_BOUNDARY_TYPE}"
+            f"&startBoundaryType={DATA_READ_START_BOUNDARY_TYPE}"
+            f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
+        ),
+        body_bulk
+    )
+
 
     
 
