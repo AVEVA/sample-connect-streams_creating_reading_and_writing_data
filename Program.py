@@ -1,11 +1,11 @@
 import json
+import random
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import requests
-import random
 
 import pandas as pd
 import seaborn as sns
@@ -13,11 +13,11 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 DEFAULT_SETTINGS_PATH = Path(__file__).with_name("appsettings.json")
-DATA_BACKFILL_START_TIME = "2026-06-24T00:00:00Z"
+DATA_BACKFILL_START_TIME = "2026-06-01T00:00:00Z"
 DATA_BACKFILL_END_TIME = "2026-06-29T00:00:00Z"
 DATA_BACKFILL_INTERVAL = "01:00:00"
 DATA_READ_FILTER = ""
-DATA_READ_COUNT = 1000
+DATA_READ_INTERVAL = "24:00:00"
 DATA_READ_BOUNDARY_TYPE = "Outside"
 DATA_READ_START_BOUNDARY_TYPE = "Exact"
 DATA_READ_END_BOUNDARY_TYPE = "Inside"
@@ -91,17 +91,15 @@ def build_timeseries_data(start_iso: str, end_iso: str, interval: str) -> list[d
 
     data: list[dict[str, Any]] = []
     current = start
-    index = 0
     while current <= end:
         timestamp = current.isoformat().replace("+00:00", "Z")
         data.append({"Timestamp": timestamp, "Value": random.random()})
         current += step
-        index += 1
 
     return data
 
 
-def fail(message: str, details: Any | None = None) -> None:
+def fail(message: str, details: Any | None = None):
     print(message, file=sys.stderr)
     if details is not None:
         if isinstance(details, (dict, list)):
@@ -134,9 +132,7 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     client_secret = settings.get("client_secret")
     account_id = settings.get("account_id")
     data_store_id = settings.get("data_store_id")
-    scope = settings.get("scope") or "api"
     base_url = settings.get("base_url")
-    sds_api_version = settings.get("sds_api_version")
 
     if not well_known_url:
         fail("Set well_known_url in appsettings.json.")
@@ -150,16 +146,12 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     if not base_url:
         fail("Set base_url to the full CONNECT Data Services endpoint URL in appsettings.json.")
 
-    if not sds_api_version:
-        fail("Set sds_api_version in appsettings.json.")
-
-    sds_url = f"{base_url}/api/account/{account_id}/sds/{data_store_id}/{sds_api_version}"
+    sds_url = f"{base_url}/api/account/{account_id}/sds/{data_store_id}/v2"
 
     return {
         "well_known_url": well_known_url,
         "client_id": client_id,
         "client_secret": client_secret,
-        "scope": scope,
         "sds_url" : sds_url
     }
 
@@ -203,11 +195,13 @@ def get_access_token(
     access_token = token_json.get("access_token")
     if not access_token:
         fail("No access_token in token response.", token_json)
-
+    else:
+        print("Access token acquired")
+        
     return access_token
 
 
-def getData(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
+def get_data(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
 
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -223,10 +217,10 @@ def getData(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
         if continuation_token:
             separator = "&" if "?" in request_url else "?"
             request_url = f"{request_url}{separator}continuationToken={continuation_token}&count={count}"
-        elif "?" not in request_url:
+        elif "?" not in request_url and "count" not in request_url:
             # Add count parameter to initial request
             request_url = f"{request_url}?count={count}"
-        else:
+        elif "count" not in request_url:
             # URL already has parameters, append count
             request_url = f"{request_url}&count={count}"
 
@@ -249,7 +243,7 @@ def getData(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
         
         # Continue to next page
 
-def post(access_token: str, url: str, body: Any) -> None:
+def post(access_token: str, url: str, body: Any):
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
@@ -258,12 +252,13 @@ def post(access_token: str, url: str, body: Any) -> None:
 
     try:
         response = requests.post(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
     except requests.RequestException as exc:
         fail("POST request failed.", exc)
     
     return response
 
-def put(access_token: str, url: str, body: Any) -> None:
+def put(access_token: str, url: str, body: Any):
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
@@ -272,33 +267,189 @@ def put(access_token: str, url: str, body: Any) -> None:
 
     try:
         response = requests.put(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
     except requests.RequestException as exc:
         fail("PUT request failed.", exc)
     
     return response
 
 def plot(data):
-    # 1. Convert data to dataframe
-    df = pd.DataFrame(data)
+    # Handle dict with multiple streams or list of data points
+    if isinstance(data, dict):
+        # Convert dict of streams to a list with stream_id column
+        all_data_points = []
+        for stream_id, data_points in data.items():
+            for point in data_points:
+                point_copy = point.copy()
+                point_copy['stream_id'] = stream_id
+                all_data_points.append(point_copy)
+        df = pd.DataFrame(all_data_points)
+    else:
+        # Original behavior for list of data points
+        df = pd.DataFrame(data)
 
-    # 2. Convert timestamp column to datetime
-    for timestamp_col in ['Timestamp', 'timestamp']:
-        if timestamp_col in df.columns:
-            df[timestamp_col] = pd.to_datetime(df[timestamp_col])
+    # 2. Normalise column names so seaborn x/y references match, then convert timestamp
+    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-    # 3. Set the visual style 
+    # 4. Set the visual style 
     sns.set_theme(style="whitegrid")
 
-    # 4. Plot multiple lines automatically using 'hue'
-    ax = sns.lineplot(data=df, x='timestamp', y='value', marker='o')
+    # 5. Plot multiple lines automatically using 'hue' for stream_id if available
+    if 'stream_id' in df.columns:
+        ax = sns.lineplot(data=df, x='timestamp', y='value', hue='stream_id', marker='o')
+    else:
+        ax = sns.lineplot(data=df, x='timestamp', y='value', marker='o')
 
     # 5. Format x-axis to show mm-dd format every day
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
     ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
     plt.gcf().autofmt_xdate() # Automatically rotates the dates for readability
 
-    # 6. Display the chart
+    # 6. Set window title
+    fig = plt.gcf()
+    fig.canvas.manager.set_window_title("Sampled Data")
+
+    # 7. Display the chart
     plt.show()
+
+def table(data, title: str):
+    # 1. Convert data to dataframe
+    df = pd.DataFrame(data)
+
+    # 2. Normalise column names, then convert timestamp
+    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # 3. Display the table in a window with scrolling for large datasets
+    max_rows_per_page = 20
+    total_rows = len(df)
+    
+    if total_rows > max_rows_per_page:
+        # Display first page for large tables
+        df_display = df.head(max_rows_per_page)
+        title_text = f"Table (showing {max_rows_per_page} of {total_rows} rows)"
+    else:
+        df_display = df
+        title_text = "Table"
+    
+    # Calculate appropriate figure size based on rows and columns
+    n_rows, n_cols = df_display.shape
+    fig_height = max(8, 0.3 * (n_rows + 1) + 1)  # +1 for header row
+    fig_width = max(12, n_cols * 1.5)
+    
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis('off')
+    
+    # Set window title
+    fig.canvas.manager.set_window_title(title)
+    
+    table_obj = ax.table(
+        cellText=df_display.values,
+        colLabels=df_display.columns,
+        cellLoc='left',
+        loc='center'
+    )
+    
+    table_obj.auto_set_font_size(False)
+    table_obj.set_fontsize(9)
+    table_obj.scale(1, 1.5)
+    
+    # Style header row
+    for i in range(n_cols):
+        table_obj[(0, i)].set_facecolor('#40466e')
+        table_obj[(0, i)].set_text_props(weight='bold', color='white')
+    
+    plt.title(title_text, pad=20)
+    plt.tight_layout()
+    plt.show()
+
+def create_or_update_sds_type(token, runtime_settings):
+    sds_type_body = load_settings(Path(__file__).with_name("SDSType.json"))
+    sds_type_id = sds_type_body["id"]
+    post(token, f"{runtime_settings['sds_url']}/Types/{sds_type_id}", sds_type_body)
+    print("Sds type created or updated")
+
+def create_or_update_sds_stream(token, runtime_settings, stream_filename):
+    sds_stream_body = load_settings(Path(__file__).with_name(stream_filename))
+    sds_stream_id = sds_stream_body["id"]
+    post(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id}", sds_stream_body)
+    print("Sds stream created or updated")
+
+def backfill_stream_data(token, runtime_settings, stream_id):
+    data = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
+    put(token, f"{runtime_settings['sds_url']}/Streams/{stream_id}/Data", data)
+    print(f'Data backfilled to stream {stream_id}')
+
+def post_for_data(token, runtime_settings, url, body, max_retries=3):
+    """Send POST request with pagination and retry logic for failed streams."""
+    all_data = {}
+    stream_ids_to_retry = body.get("ids", [])
+    retry_count = 0
+    
+    while retry_count <= max_retries:
+        request_body = {"ids": stream_ids_to_retry}
+        
+        response = post(token, url, request_body)
+        response_data = response.json()
+        
+        # Handle 207 Multi-Status responses
+        if response.status_code == 207:
+            multi_status = response_data.get("multiStatus", [])
+            failed_stream_ids = []
+            
+            for status_item in multi_status:
+                if status_item.get("status") == 200:
+                    # Extract successful data
+                    if "data" in status_item:
+                        all_data.update(status_item["data"])
+                else:
+                    # Collect failed stream IDs for retry
+                    resource_id = status_item.get("resourceId")
+                    if resource_id and retry_count < max_retries:
+                        failed_stream_ids.append(resource_id)
+            
+            # Retry failed streams if any
+            if failed_stream_ids:
+                stream_ids_to_retry = failed_stream_ids
+                retry_count += 1
+                continue
+            else:
+                # No more failed streams
+                break
+        else:
+            # Non-207 response
+            if "result" in response_data:
+                all_data.update(response_data["result"])
+            
+            # Check for continuation token (pagination)
+            continuation_token = response_data.get("continuationToken")
+            if continuation_token:
+                request_body["continuationToken"] = continuation_token
+                stream_ids_to_retry = body.get("ids", [])  # Reset to original IDs for next page
+                continue
+            else:
+                break
+    
+    return all_data
+
+def read_sampled_bulk_stream_data(token, runtime_settings, stream_ids, intervals):
+    body_bulk = {"ids": stream_ids}
+    url = (
+        f"{runtime_settings['sds_url']}/Bulk/Streams/Data/Sampled"
+        f"?startIndex={DATA_BACKFILL_START_TIME}"
+        f"&endIndex={DATA_BACKFILL_END_TIME}"
+        f"&intervals={intervals}"
+        f"&sampleBy=value"
+        f"&filter={DATA_READ_FILTER}"
+        f"&boundaryType={DATA_READ_BOUNDARY_TYPE}"
+        f"&startBoundaryType={DATA_READ_START_BOUNDARY_TYPE}"
+        f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
+    )
+    bulk_data = post_for_data(token, runtime_settings, url, body_bulk)
+    return bulk_data
 
 if __name__ == "__main__":
     
@@ -310,38 +461,26 @@ if __name__ == "__main__":
         well_known_url=runtime_settings["well_known_url"],
         client_id=runtime_settings["client_id"],
         client_secret=runtime_settings["client_secret"],
-        scope=runtime_settings["scope"],
+        scope="api",
     )
 
-    print("Access token acquired")
-
     # get sds type definition and send to CONNECT
-    sds_type_body = load_settings(Path(__file__).with_name("SDSType.json"))
-    sds_type_id = sds_type_body["id"]
-    post(token, f"{runtime_settings["sds_url"]}/Types/{sds_type_id}", sds_type_body)
-    print("Sds type created or updated")
+    create_or_update_sds_type(token, runtime_settings)
 
     # get sds stream 1 definition and send to CONNECT
-    sds_stream_body_1 = load_settings(Path(__file__).with_name("SDSStream1.json"))
-    sds_stream_id_1 = sds_stream_body_1["id"]
-    post(token, f"{runtime_settings["sds_url"]}/Streams/{sds_stream_id_1}", sds_stream_body_1)
-    print("Sds stream created or updated")
+    sds_stream_id_1 = load_settings(Path(__file__).with_name("SDSStream1.json"))["id"]
+    create_or_update_sds_stream(token, runtime_settings, "SDSStream1.json")
 
     # get sds stream 2 definition and send to CONNECT
-    sds_stream_body_2 = load_settings(Path(__file__).with_name("SDSStream2.json"))
-    sds_stream_id_2 = sds_stream_body_2["id"]
-    post(token, f"{runtime_settings["sds_url"]}/Streams/{sds_stream_id_2}", sds_stream_body_2)
-    print("Sds stream created or updated")
+    sds_stream_id_2 = load_settings(Path(__file__).with_name("SDSStream2.json"))["id"]
+    create_or_update_sds_stream(token, runtime_settings, "SDSStream2.json")
 
     # backfill data into streams
-    data_1 = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
-    put(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_1}/Data", data_1)
-    data_2 = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
-    put(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_2}/Data", data_2)
-    print("Data backfilled to streams")
+    backfill_stream_data(token, runtime_settings, sds_stream_id_1)
+    backfill_stream_data(token, runtime_settings, sds_stream_id_2)
 
-    # read and plot stored data for singular stream in time window
-    raw_data = getData(
+    # read and show stored data for singular stream in time window
+    raw_data = get_data(
         token,
         (
             f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_1}/Data/Window"
@@ -353,27 +492,25 @@ if __name__ == "__main__":
             f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
         ),
     )
-    plot(raw_data["items"])
+    table(raw_data["items"], f"Raw data for {sds_stream_id_1}")
 
-    # read and plot stored data for streams in bulk in time window
-    body_bulk = {"ids": [sds_stream_id_1, sds_stream_id_2]}
-    intervals_bulk = calculate_interval_count(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
-    bulk_data = post(
+    # read and show interpolated data for a singular stream in time window
+    interpolated_data = get_data(
         token,
         (
-            f"{runtime_settings['sds_url']}/Bulk/Streams/Data/Sampled"
+            f"{runtime_settings['sds_url']}/Streams/{sds_stream_id_2}/Data/Interpolated/Interval"
             f"?startIndex={DATA_BACKFILL_START_TIME}"
             f"&endIndex={DATA_BACKFILL_END_TIME}"
-            f"&intervals={intervals_bulk}"
-            f"&sampleBy=value"
-            f"&filter={DATA_READ_FILTER}"
-            f"&boundaryType={DATA_READ_BOUNDARY_TYPE}"
-            f"&startBoundaryType={DATA_READ_START_BOUNDARY_TYPE}"
-            f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
+            f"&count={calculate_interval_count(DATA_BACKFILL_START_TIME,DATA_BACKFILL_END_TIME,DATA_READ_INTERVAL)}"
         ),
-        body_bulk
     )
+    table(interpolated_data["items"], f"Interpolated data for {sds_stream_id_2}")
+
+    # read and plot stored data for streams in bulk in time window
+    bulk_data = read_sampled_bulk_stream_data(token, runtime_settings, [sds_stream_id_1, sds_stream_id_2], 5)
+    plot(bulk_data)
+
+    input("Press Enter to exit...")
 
 
-    
 
