@@ -1,3 +1,8 @@
+variables:
+  - group: PRG-dev-automation
+  - name: analysisProject
+    value: sample-connect-streams_creating_reading_and_writing_data
+
 trigger:
   batch: true
   branches:
@@ -19,42 +24,31 @@ schedules:
 
 resources:
   repositories:
-    - repository: OpsGuildAutomationRepo
+    - repository: ArchitectureRepo
       type: git
-      name: DevOps/opsguild.automation
+      name: Architecture/Architecture
       ref: refs/heads/main
     - repository: templates
       type: github
-      name: AVEVA/AVEVA-Samples
+      name: AVEVA/pipelines-templates
       endpoint: AVEVA
-
-variables:
-  - name: analysisProject
-    value: REPLACE_WITH_SAMPLE_NAME #TODO Replace placeholder.
-
-parameters:
-  - name: pool
-    default: DevOps Managed Containers Build
-  - name: containerDemands
-    type: object
-    default: ['Agent.OS -equals Linux'] #TODO Check container demands.
+    - repository: antiMalwareTemplate
+      name: Architecture/Architecture 
+      ref: refs/heads/antiMalwareVersions/0.1
+      type: git
 
 jobs:
-  - job: Tests
-    condition: ne(variables['Build.Reason'], 'Schedule')
-    pool:
-      name: ${{ parameters.pool }}
-      demands: ${{ parameters.containerDemands }}
-    steps:
-      - template: '/miscellaneous/build_templates/appsettings.yml@templates'
-        parameters:
-          secrets: 'TenantId, NamespaceId, CommunityId, ClientId, ClientSecret, Resource'
 
-      #TODO Add steps to run sample tests.
-
-  #TODO Static code analysis should be run by any sample that can.
-  #If the language your sample is written in not supported by polaris and blackduck, you may remove this job and OpsGuildAutomationRepo repository above.
-  #Example: Power Query is not supported so those samples do not have a code analysis step.
-  - template: '/miscellaneous/build_templates/code-analysis.yml@templates'
+  - template: '/code-analysis/code-analysis.yml@templates'
     parameters:
+      poolForExecution: Cloud Platform CONNECT v2 Development
       useRequirementsTxt: true
+      buildSteps:
+        - script: |
+            echo "Installing Python dependencies"
+            python -c "import sys; print(sys.executable)"
+            python -m pip --version
+            python -m pip install --upgrade pip
+            python -m pip install -r requirements.txt
+            python -m pip freeze
+          displayName: 'Install Python dependencies'
