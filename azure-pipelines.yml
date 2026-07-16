@@ -50,5 +50,19 @@ jobs:
             python -m pip --version
             python -m pip install --upgrade pip
             python -m pip install -r requirements.txt
+            python -m pip install pytest
             python -m pip freeze
           displayName: 'Install Python dependencies'
+        - script: |
+            echo "Running tests"
+            python -c "import os; os.makedirs(r'$(Build.SourcesDirectory)/test-results', exist_ok=True)"
+            python -m pytest -q --junitxml="$(Build.SourcesDirectory)/test-results/pytest.xml"
+          displayName: 'Run pytest'
+        - task: PublishTestResults@2
+          displayName: 'Publish pytest results'
+          condition: succeededOrFailed()
+          inputs:
+            testResultsFormat: 'JUnit'
+            testResultsFiles: '$(Build.SourcesDirectory)/test-results/pytest.xml'
+            failTaskOnFailedTests: true
+            testRunTitle: 'Python unit tests'

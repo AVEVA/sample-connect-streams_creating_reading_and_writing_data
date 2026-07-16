@@ -7,9 +7,8 @@ token acquisition through data writes and reads.
 """
 
 import json
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -101,6 +100,75 @@ class TestBuildTimeseriesData:
             )
 
 
+class TestSettingsLoading:
+    def _write_json(self, tmp_path: Path, name: str, data) -> Path:
+        path = tmp_path / name
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return path
+
+    def test_load_settings_missing_file_exits(self, tmp_path, capsys):
+        with pytest.raises(SystemExit):
+            prog.load_settings(tmp_path / "missing.json")
+        assert "Settings file not found" in capsys.readouterr().err
+
+    def test_load_settings_invalid_json_exits(self, tmp_path, capsys):
+        settings_path = tmp_path / "bad.json"
+        settings_path.write_text("{this is not valid json", encoding="utf-8")
+
+        with pytest.raises(SystemExit):
+            prog.load_settings(settings_path)
+        assert "not valid JSON" in capsys.readouterr().err
+
+    def test_load_settings_root_must_be_object(self, tmp_path, capsys):
+        settings_path = self._write_json(tmp_path, "settings.json", [1, 2, 3])
+
+        with pytest.raises(SystemExit):
+            prog.load_settings(settings_path)
+        assert "root must be a JSON object" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "override, expected_message",
+        [
+            ({"well_known_url": ""}, "Set well_known_url"),
+            ({"client_id": ""}, "Set client_id and client_secret"),
+            ({"client_secret": ""}, "Set client_id and client_secret"),
+            ({"account_id": ""}, "Set account_id and data_store_id"),
+            ({"data_store_id": ""}, "Set account_id and data_store_id"),
+            ({"base_url": ""}, "Set base_url"),
+        ],
+    )
+    def test_load_runtime_settings_required_fields(self, tmp_path, override, expected_message, capsys):
+        settings = {
+            "well_known_url": "https://identity.example.com/.well-known/openid-configuration",
+            "client_id": "cid",
+            "client_secret": "secret",
+            "account_id": "acct-id",
+            "data_store_id": "store-id",
+            "base_url": "https://platform.connect.aveva.com",
+        }
+        settings.update(override)
+        settings_path = self._write_json(tmp_path, "appsettings.json", settings)
+
+        with pytest.raises(SystemExit):
+            prog.load_runtime_settings(settings_path)
+        assert expected_message in capsys.readouterr().err
+
+    def test_load_runtime_settings_builds_sds_url(self, tmp_path):
+        settings = {
+            "well_known_url": "https://identity.example.com/.well-known/openid-configuration",
+            "client_id": "cid",
+            "client_secret": "secret",
+            "account_id": "acct-id",
+            "data_store_id": "store-id",
+            "base_url": "https://platform.connect.aveva.com",
+        }
+        settings_path = self._write_json(tmp_path, "appsettings.json", settings)
+
+        runtime = prog.load_runtime_settings(settings_path)
+
+        assert runtime["sds_url"] == "https://platform.connect.aveva.com/api/account/acct-id/sds/store-id/v2"
+
+
 # ---------------------------------------------------------------------------
 # Unit tests – HTTP helpers
 # ---------------------------------------------------------------------------
@@ -157,6 +225,42 @@ class TestGetData:
 
         assert result == {"items": FAKE_POINTS}
 
+    def test_adds_count_when_initial_url_has_no_query(self):
+        with patch("Program.get", return_value=_ok_response({"items": []})) as mock_get:
+            prog.get_data(FAKE_TOKEN, f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window", count=250)
+
+        called_url = mock_get.call_args[0][1]
+        assert called_url.endswith("?count=250")
+
+    def test_adds_count_when_initial_url_has_query(self):
+        with patch("Program.get", return_value=_ok_response({"items": []})) as mock_get:
+            prog.get_data(
+                FAKE_TOKEN,
+                f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b",
+                count=250,
+            )
+
+        called_url = mock_get.call_args[0][1]
+        assert "&count=250" in called_url
+
+    def test_paginated_request_includes_continuation_token_and_count(self):
+        page1 = {"items": [FAKE_POINTS[0]], "continuationToken": "tok-abc"}
+        page2 = {"items": [FAKE_POINTS[1]]}
+
+        with patch("Program.get", side_effect=[_ok_response(page1), _ok_response(page2)]) as mock_get:
+            result = prog.get_data(
+                FAKE_TOKEN,
+                f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b",
+                count=42,
+            )
+
+        assert result == {"items": FAKE_POINTS}
+        first_url = mock_get.call_args_list[0][0][1]
+        second_url = mock_get.call_args_list[1][0][1]
+        assert "&count=42" in first_url
+        assert "continuationToken=tok-abc" in second_url
+        assert "count=42" in second_url
+
     def test_http_error_exits(self):
         import requests as req
         mock_resp = MagicMock()
@@ -173,7 +277,7 @@ class TestPostForData:
 
         with patch("Program.post", return_value=mock_resp):
             result = prog.post_for_data(
-                FAKE_TOKEN, RUNTIME_SETTINGS,
+                FAKE_TOKEN,
                 f"{SDS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID]},
             )
@@ -194,7 +298,7 @@ class TestPostForData:
 
         with patch("Program.post", return_value=mock_resp):
             result = prog.post_for_data(
-                FAKE_TOKEN, RUNTIME_SETTINGS,
+                FAKE_TOKEN,
                 f"{SDS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID, STREAM_2_ID]},
             )
@@ -230,13 +334,37 @@ class TestPostForData:
 
         with patch("Program.post", side_effect=fail_then_succeed):
             result = prog.post_for_data(
-                FAKE_TOKEN, RUNTIME_SETTINGS,
+                FAKE_TOKEN,
                 f"{SDS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID, STREAM_2_ID]},
             )
 
         assert STREAM_1_ID in result
         assert STREAM_2_ID in result
+
+    def test_non_207_continuation_token_requests_next_page(self):
+        page1 = _ok_response(
+            {
+                "result": {STREAM_1_ID: [FAKE_POINTS[0]]},
+                "continuationToken": "next-page",
+            }
+        )
+        page2 = _ok_response(
+            {
+                "result": {STREAM_2_ID: [FAKE_POINTS[1]]},
+            }
+        )
+
+        with patch("Program.post", side_effect=[page1, page2]) as mock_post:
+            result = prog.post_for_data(
+                FAKE_TOKEN,
+                f"{SDS_URL}/Bulk/Streams/Data/Sampled",
+                {"ids": [STREAM_1_ID, STREAM_2_ID]},
+            )
+
+        assert result[STREAM_1_ID] == [FAKE_POINTS[0]]
+        assert result[STREAM_2_ID] == [FAKE_POINTS[1]]
+        assert mock_post.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -345,9 +473,9 @@ class TestEndToEnd:
                 )
                 assert token == FAKE_TOKEN
 
-                prog.create_or_update_sds_type(token, runtime_settings)
-                prog.create_or_update_sds_stream(token, runtime_settings, "SDSStream1.json")
-                prog.create_or_update_sds_stream(token, runtime_settings, "SDSStream2.json")
+                prog.get_or_create_sds_type(token, runtime_settings)
+                prog.get_or_create_sds_stream(token, runtime_settings, "SDSStream1.json")
+                prog.get_or_create_sds_stream(token, runtime_settings, "SDSStream2.json")
                 prog.backfill_stream_data(token, runtime_settings, STREAM_1_ID)
                 prog.backfill_stream_data(token, runtime_settings, STREAM_2_ID)
 
@@ -373,4 +501,4 @@ class TestEndToEnd:
             assert STREAM_2_ID in bulk
 
             with patch("matplotlib.pyplot.show"):
-                prog.plot(bulk)
+                prog.plot(bulk, "Sampled Data")
