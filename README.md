@@ -19,10 +19,23 @@ Developed against Python 3.14.2
 1. Update `appsettings.json` with the credentials provided by AVEVA
 1. Run `program.py`
 
-To Test the sample:
+To Test the Sample:
 
 1. Install pytest `python -m pip install pytest`
 1. Run `python -m pytest -q`
+
+## Sample Code Overview
+
+Here is a high level overview of the steps performed by this sample:
+
+1. Get bearer token from token endpoint found in the well-known url provided
+1. Get or create SDS Type defined in SDSType.json
+1. Get or create two SDS streams defined in SDSStream1.json and SDSStream2.json
+1. Generate and backfill random data for Stream1 at the backfill start, end and interval provided in the globals
+1. Generate and backfill random data for Stream1 at the backfill start, end and interval provided in the globals
+1. Read raw/stored data for Stream1 and display the first 20 values in a table
+1. Read interpolated data at the interval provided in the global variables for Stream2 and display the first 20 values in a table
+1. Get bulk sampled data for both Stream1 and Stream2 and plot the values in a trend
 
 ## Configure the Sample
 
@@ -40,10 +53,23 @@ The values to be replaced are in `appsettings.json`:
   "base_url": "https://platform.connect.aveva.com"
 }
 ```
+To modify the stream creation, backfill and data read behaviour:
+
+1. To modify the SDS Type definition in SDSType.json. If you change the properties to be different than timestamp and value, you'll need to modify the build_time_series_data function to handle your properties accordingly.
+1. To modify the SDS Stream definitions in SDSSTream1.json and SDSStream2.json.
+1. To modify the start and end time of data backfill and data reading as well as the behaviour for readig data, modify the global variables at the beginning of Program.py:
+
+    - **DEFAULT_SETTINGS_PATH** - The path to the appsettings.json file
+    - **DATA_BACKFILL_START_TIME** - Start time of data backfill period (ISO 8601 format e.g. 2026-01-01T00:00:00Z)
+    - **DATA_BACKFILL_END_TIME** - End time of data backfill period (ISO 8601 format e.g. 2026-01-01T00:00:00Z)
+    - **DATA_BACKFILL_INTERVAL** - Indicates a time interval at which you'd like to backfill data (format is hh:mm:ss)
+    - **DATA_READ_FILTER** - Filter for reading stream data. Expression used to filter the result set based on property values. Filter expressions support comparison operators (eq, ne, gt, ge, lt, le), logical operators (and, or, not), and functions like startswith, endswith, and contains. For datetime properties, use ISO 8601 format like '2023-01-01T00:00:00Z'. The filter syntax follows OData filter expression syntax for precise property-based filtering.
+    - **DATA_READ_INTERVAL** - Indicates a time interval at which you'd like to read interpolated data (format is hh:mm:ss). This will be converted to a number of intervals to be sent to sds based on the start and end time.
+    - **DATA_READ_BOUNDARY_TYPE** - Controls how data at or near the startIndex and endIndex boundaries is handled when retrieving data. This parameter applies the same boundary behavior to both start and end of the data window. (Exact, Inside, Outside or ExactOrCalculated)
+    - **DATA_READ_START_BOUNDARY_TYPE** - Controls how data at or near the startIndex boundary is handled. Determines whether values exactly at the start boundary are included, excluded, or calculated based on interpolation settings. (Exact, Inside, Outside or ExactOrCalculated)
+    - **DATA_READ_END_BOUNDARY_TYPE** - Controls how data at or near the endIndex boundary is handled. Determines whether values exactly at the start boundary are included, excluded, or calculated based on interpolation settings. (Exact, Inside, Outside or ExactOrCalculated)
+    - **DATA_READ_SAMPLED_INTERVALS** - The number of evenly spaced intervals to divide the data into when requesting summaries or sampled data. Higher values produce more granular results with shorter time spans between points. 
+
 ---
-
-Automated test uses Python 3.9.1 x64
-
-For the main Cds time series samples page [ReadMe](https://github.com/AVEVA/AVEVA-Samples-CloudOperations/blob/main/docs/SDS_TIME_SERIES.md)  
-For the main Cds samples page [ReadMe](https://github.com/AVEVA/AVEVA-Samples-CloudOperations)  
+ 
 For the main AVEVA samples page [ReadMe](https://github.com/AVEVA/AVEVA-Samples)
