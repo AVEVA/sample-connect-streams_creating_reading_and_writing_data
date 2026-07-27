@@ -32,7 +32,7 @@ Here is a high level overview of the steps performed by this sample:
 1. Get or create SDS Type defined in SDSType.json
 1. Get or create two SDS streams defined in SDSStream1.json and SDSStream2.json
 1. Generate and backfill random data for Stream1 at the backfill start, end and interval provided in the globals
-1. Generate and backfill random data for Stream1 at the backfill start, end and interval provided in the globals
+1. Generate and backfill random data for Stream2 at the backfill start, end and interval provided in the globals
 1. Read raw/stored data for Stream1 and display the first 20 values in a table
 1. Read interpolated data at the interval provided in the global variables for Stream2 and display the first 20 values in a table
 1. Get bulk sampled data for both Stream1 and Stream2 and plot the values in a trend

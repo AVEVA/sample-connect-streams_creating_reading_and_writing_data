@@ -14,7 +14,7 @@ import matplotlib.dates as mdates
 
 DEFAULT_SETTINGS_PATH = Path(__file__).with_name("appsettings.json")
 DATA_BACKFILL_START_TIME = "2026-06-01T00:00:00Z"
-DATA_BACKFILL_END_TIME = "2026-06-29T00:00:00Z"
+DATA_BACKFILL_END_TIME = "2026-07-01T00:00:00Z"
 DATA_BACKFILL_INTERVAL = "01:00:00"
 DATA_READ_FILTER = ""
 DATA_READ_INTERVAL = "24:00:00"
@@ -24,14 +24,18 @@ DATA_READ_END_BOUNDARY_TYPE = "Inside"
 DATA_READ_SAMPLED_INTERVALS = 5
 
 
-def _parse_iso_datetime(value: str) -> datetime:
+# ============================================================================
+# PARSING & UTILITY FUNCTIONS
+# ============================================================================
+
+def parse_iso_datetime(value: str) -> datetime:
     # Support common UTC suffix used in SDS payloads.
     if value.endswith("Z"):
         value = f"{value[:-1]}+00:00"
     return datetime.fromisoformat(value)
 
 
-def _parse_hms_interval_to_timedelta(value: str) -> timedelta:
+def parse_hms_interval_to_timedelta(value: str) -> timedelta:
     # Supports H:MM:SS (for example 1:00:00).
     parts = value.split(":")
     if len(parts) != 3:
@@ -68,12 +72,12 @@ def calculate_interval_count(start_iso: str, end_iso: str, interval: str) -> int
         Number of intervals between start and end times (inclusive)
     """
     # Parse and validate timestamps before calculating sample count.
-    start = _parse_iso_datetime(start_iso.strip())
-    end = _parse_iso_datetime(end_iso.strip())
+    start = parse_iso_datetime(start_iso.strip())
+    end = parse_iso_datetime(end_iso.strip())
     if start > end:
         raise ValueError("time_range_iso start must be less than or equal to end")
     
-    step = _parse_hms_interval_to_timedelta(interval)
+    step = parse_hms_interval_to_timedelta(interval)
     time_range = end - start
     
     # Calculate the number of intervals (add 1 to include both start and end)
@@ -84,12 +88,12 @@ def calculate_interval_count(start_iso: str, end_iso: str, interval: str) -> int
 
 def build_timeseries_data(start_iso: str, end_iso: str, interval: str) -> list[dict[str, Any]]:
     # Build deterministic timestamps and random values for stream backfill samples.
-    start = _parse_iso_datetime(start_iso.strip())
-    end = _parse_iso_datetime(end_iso.strip())
+    start = parse_iso_datetime(start_iso.strip())
+    end = parse_iso_datetime(end_iso.strip())
     if start > end:
         raise ValueError("time_range_iso start must be less than or equal to end")
 
-    step = _parse_hms_interval_to_timedelta(interval)
+    step = parse_hms_interval_to_timedelta(interval)
 
     data: list[dict[str, Any]] = []
     current = start
@@ -101,6 +105,10 @@ def build_timeseries_data(start_iso: str, end_iso: str, interval: str) -> list[d
 
     return data
 
+
+# ============================================================================
+# CONFIGURATION & SETTINGS
+# ============================================================================
 
 def fail(message: str, details: Any | None = None) -> NoReturn:
     print(message, file=sys.stderr)
@@ -160,6 +168,10 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     }
 
 
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
 def get_access_token(
     well_known_url: str,
     client_id: str,
@@ -206,6 +218,10 @@ def get_access_token(
     return access_token
 
 
+# ============================================================================
+# HTTP REQUEST HELPERS
+# ============================================================================
+
 def get(access_token: str, url: str) -> requests.Response:
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -219,6 +235,67 @@ def get(access_token: str, url: str) -> requests.Response:
         fail("GET request failed.", exc)
 
     return response
+
+
+def post(access_token: str, url: str, body: Any) -> requests.Response:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        fail("POST request failed.", exc)
+    
+    return response
+
+
+def put(access_token: str, url: str, body: Any) -> requests.Response:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.put(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        fail("PUT request failed.", exc)
+    
+    return response
+
+
+# ============================================================================
+# SDS OPERATIONS
+# ============================================================================
+
+def get_or_create_sds_type(token: str, runtime_settings: dict[str, str]) -> dict[str, Any]:
+    # Upsert type definition so stream creation has a known schema.
+    sds_type_body = load_settings(Path(__file__).with_name("SDSType.json"))
+    sds_type_id = sds_type_body["id"]
+    response = post(token, f"{runtime_settings['sds_url']}/Types/{sds_type_id}", sds_type_body)
+    print("Sds type created or retrieved")
+    return response.json()
+
+
+def get_or_create_sds_stream(token: str, runtime_settings: dict[str, str], stream_filename: str) -> dict[str, Any]:
+    # Upsert stream definition from local JSON template.
+    sds_stream_body = load_settings(Path(__file__).with_name(stream_filename))
+    sds_stream_id = sds_stream_body["id"]
+    response = post(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id}", sds_stream_body)
+    print("Sds stream created or retrieved")
+    return response.json()
+
+
+def backfill_stream_data(token: str, runtime_settings: dict[str, str], stream_id: str) -> None:
+    # Seed each stream with sample values across the configured time range.
+    data = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
+    put(token, f"{runtime_settings['sds_url']}/Streams/{stream_id}/Data", data)
+    print(f'Data backfilled to stream {stream_id}')
 
 
 def get_data(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
@@ -254,153 +331,6 @@ def get_data(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
         
         # Continue to next page
 
-def post(access_token: str, url: str, body: Any) -> requests.Response:
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=body, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        fail("POST request failed.", exc)
-    
-    return response
-
-def put(access_token: str, url: str, body: Any) -> requests.Response:
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.put(url, headers=headers, json=body, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        fail("PUT request failed.", exc)
-    
-    return response
-
-def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: str) -> None:
-    # Handle dict with multiple streams or list of data points
-    if isinstance(data, dict):
-        # Convert dict of streams to a list with stream_id column
-        all_data_points = []
-        for stream_id, data_points in data.items():
-            for point in data_points:
-                point_copy = point.copy()
-                point_copy['stream_id'] = stream_id
-                all_data_points.append(point_copy)
-        df = pd.DataFrame(all_data_points)
-    else:
-        # Handle single stream list of data points
-        df = pd.DataFrame(data)
-
-    # Normalise columns and coerce timestamp to datetime for plotting.
-    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-    # Set a consistent plotting theme for readability.
-    sns.set_theme(style="whitegrid")
-
-    # Create a wider plotting window for better date readability.
-    fig, ax = plt.subplots(figsize=(14, 6))
-
-    # Plot one or many series depending on whether stream_id is present.
-    if 'stream_id' in df.columns:
-        sns.lineplot(data=df, x='timestamp', y='value', hue='stream_id', marker='o', ax=ax)
-    else:
-        sns.lineplot(data=df, x='timestamp', y='value', marker='o', ax=ax)
-
-    # Reduce axis crowding by auto-selecting fewer date ticks.
-    locator = mdates.AutoDateLocator(minticks=4, maxticks=16)
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-    plt.gcf().autofmt_xdate() # Automatically rotates the dates for readability
-
-    # Set window title
-    fig.canvas.manager.set_window_title(title)
-
-    # Display the chart
-    plt.show()
-
-def table(data: list[dict[str, Any]], title: str) -> None:
-    # Convert data to dataframe.
-    df = pd.DataFrame(data)
-
-    # Normalise column names, then convert timestamp.
-    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
-    if 'timestamp' in df.columns:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-    # Limit displayed rows for large datasets to keep the table legible.
-    max_rows_per_page = 20
-    total_rows = len(df)
-    
-    if total_rows > max_rows_per_page:
-        # Display first page for large tables
-        df_display = df.head(max_rows_per_page)
-        title_text = f"Table (showing {max_rows_per_page} of {total_rows} rows)"
-    else:
-        df_display = df
-        title_text = "Table"
-    
-    # Scale figure dimensions with table size.
-    n_rows, n_cols = df_display.shape
-    fig_height = max(8, 0.3 * (n_rows + 1) + 1)  # +1 for header row
-    fig_width = max(12, n_cols * 1.5)
-    
-    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    ax.axis('off')
-    
-    # Set window title
-    fig.canvas.manager.set_window_title(title)
-    
-    table_obj = ax.table(
-        cellText=df_display.values,
-        colLabels=df_display.columns,
-        cellLoc='left',
-        loc='center'
-    )
-    
-    table_obj.auto_set_font_size(False)
-    table_obj.set_fontsize(9)
-    table_obj.scale(1, 1.5)
-    
-    # Style header row
-    for i in range(n_cols):
-        table_obj[(0, i)].set_facecolor('#40466e')
-        table_obj[(0, i)].set_text_props(weight='bold', color='white')
-    
-    plt.title(title_text, pad=20)
-    plt.tight_layout()
-    plt.show()
-
-def get_or_create_sds_type(token: str, runtime_settings: dict[str, str]) -> dict[str, Any]:
-    # Upsert type definition so stream creation has a known schema.
-    sds_type_body = load_settings(Path(__file__).with_name("SDSType.json"))
-    sds_type_id = sds_type_body["id"]
-    response = post(token, f"{runtime_settings['sds_url']}/Types/{sds_type_id}", sds_type_body)
-    print("Sds type created or retrieved")
-    return response.json()
-
-def get_or_create_sds_stream(token: str, runtime_settings: dict[str, str], stream_filename: str) -> dict[str, Any]:
-    # Upsert stream definition from local JSON template.
-    sds_stream_body = load_settings(Path(__file__).with_name(stream_filename))
-    sds_stream_id = sds_stream_body["id"]
-    response = post(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id}", sds_stream_body)
-    print("Sds stream created or retrieved")
-    return response.json()
-
-def backfill_stream_data(token: str, runtime_settings: dict[str, str], stream_id: str) -> None:
-    # Seed each stream with sample values across the configured time range.
-    data = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
-    put(token, f"{runtime_settings['sds_url']}/Streams/{stream_id}/Data", data)
-    print(f'Data backfilled to stream {stream_id}')
 
 def post_for_data(
     token: str,
@@ -462,6 +392,7 @@ def post_for_data(
     
     return all_data
 
+
 def read_sampled_bulk_stream_data(
     token: str,
     runtime_settings: dict[str, str],
@@ -483,6 +414,113 @@ def read_sampled_bulk_stream_data(
     )
     bulk_data = post_for_data(token, url, body_bulk)
     return bulk_data
+
+
+# ============================================================================
+# VISUALIZATION & DISPLAY
+# ============================================================================
+
+def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: str) -> None:
+    # Handle dict with multiple streams or list of data points
+    if isinstance(data, dict):
+        # Convert dict of streams to a list with stream_id column
+        all_data_points = []
+        for stream_id, data_points in data.items():
+            for point in data_points:
+                point_copy = point.copy()
+                point_copy['stream_id'] = stream_id
+                all_data_points.append(point_copy)
+        df = pd.DataFrame(all_data_points)
+    else:
+        # Handle single stream list of data points
+        df = pd.DataFrame(data)
+
+    # Normalise columns and coerce timestamp to datetime for plotting.
+    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # Set a consistent plotting theme for readability.
+    sns.set_theme(style="whitegrid")
+
+    # Create a wider plotting window for better date readability.
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    # Plot one or many series depending on whether stream_id is present.
+    if 'stream_id' in df.columns:
+        sns.lineplot(data=df, x='timestamp', y='value', hue='stream_id', marker='o', ax=ax)
+    else:
+        sns.lineplot(data=df, x='timestamp', y='value', marker='o', ax=ax)
+
+    # Reduce axis crowding by auto-selecting fewer date ticks.
+    locator = mdates.AutoDateLocator(minticks=4, maxticks=16)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    plt.gcf().autofmt_xdate() # Automatically rotates the dates for readability
+
+    # Set window title
+    fig.canvas.manager.set_window_title(title)
+
+    # Display the chart
+    plt.show()
+
+
+def table(data: list[dict[str, Any]], title: str) -> None:
+    # Convert data to dataframe.
+    df = pd.DataFrame(data)
+
+    # Normalise column names, then convert timestamp.
+    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+    # Limit displayed rows for large datasets to keep the table legible.
+    max_rows_per_page = 20
+    total_rows = len(df)
+    
+    if total_rows > max_rows_per_page:
+        # Display first page for large tables
+        df_display = df.head(max_rows_per_page)
+        title_text = f"Table (showing {max_rows_per_page} of {total_rows} rows)"
+    else:
+        df_display = df
+        title_text = "Table"
+    
+    # Scale figure dimensions with table size.
+    n_rows, n_cols = df_display.shape
+    fig_height = max(8, 0.3 * (n_rows + 1) + 1)  # +1 for header row
+    fig_width = max(12, n_cols * 1.5)
+    
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis('off')
+    
+    # Set window title
+    fig.canvas.manager.set_window_title(title)
+    
+    table_obj = ax.table(
+        cellText=df_display.values,
+        colLabels=df_display.columns,
+        cellLoc='left',
+        loc='center'
+    )
+    
+    table_obj.auto_set_font_size(False)
+    table_obj.set_fontsize(9)
+    table_obj.scale(1, 1.5)
+    
+    # Style header row
+    for i in range(n_cols):
+        table_obj[(0, i)].set_facecolor('#40466e')
+        table_obj[(0, i)].set_text_props(weight='bold', color='white')
+    
+    plt.title(title_text, pad=20)
+    plt.tight_layout()
+    plt.show()
+
+
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
     # End-to-end sample flow: authenticate, provision assets, write data, then read/visualize it.
