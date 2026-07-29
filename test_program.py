@@ -79,14 +79,14 @@ class TestCalculateIntervalCount:
 
 class TestBuildTimeseriesData:
     def test_generates_correct_point_count(self):
-        data = prog.build_timeseries_data(
+        data = prog.generate_random_timeindexeddouble_data(
             "2026-06-01T00:00:00Z", "2026-06-01T02:00:00Z", "01:00:00"
         )
         # start, +1h, +2h  →  3 points
         assert len(data) == 3
 
     def test_points_have_required_keys(self):
-        data = prog.build_timeseries_data(
+        data = prog.generate_random_timeindexeddouble_data(
             "2026-06-01T00:00:00Z", "2026-06-01T01:00:00Z", "01:00:00"
         )
         for point in data:
@@ -95,7 +95,7 @@ class TestBuildTimeseriesData:
 
     def test_start_after_end_raises(self):
         with pytest.raises(ValueError):
-            prog.build_timeseries_data(
+            prog.generate_random_timeindexeddouble_data(
                 "2026-06-02T00:00:00Z", "2026-06-01T00:00:00Z", "01:00:00"
             )
 
@@ -473,9 +473,9 @@ class TestEndToEnd:
                 )
                 assert token == FAKE_TOKEN
 
-                prog.get_or_create_sds_type(token, runtime_settings)
-                prog.get_or_create_sds_stream(token, runtime_settings, "SDSStream1.json")
-                prog.get_or_create_sds_stream(token, runtime_settings, "SDSStream2.json")
+                prog.get_or_create_streams_type(token, runtime_settings)
+                prog.get_or_create_stream(token, runtime_settings, "SDSStream1.json")
+                prog.get_or_create_stream(token, runtime_settings, "SDSStream2.json")
                 prog.backfill_stream_data(token, runtime_settings, STREAM_1_ID)
                 prog.backfill_stream_data(token, runtime_settings, STREAM_2_ID)
 
