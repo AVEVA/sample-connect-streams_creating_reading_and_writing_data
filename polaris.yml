@@ -10,6 +10,8 @@ project:
   revision:
     name: ${scm.git.commit}
     date: ${scm.git.commit.date}
+  groups:
+    "${env.POLARIS_GROUP_NAME}": Administrator
 capture:
   fileSystem:
     python:
