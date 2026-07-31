@@ -34,22 +34,22 @@ import Program as prog
 # ---------------------------------------------------------------------------
 
 FAKE_TOKEN = "test-access-token"
-SDS_URL = "https://platform.connect.aveva.com/api/account/acct-id/sds/dev-store/v2"
+STREAMS_URL = "https://platform.connect.aveva.com/api/account/acct-id/sds/dev-store/v2"
 
 RUNTIME_SETTINGS = {
     "well_known_url": "https://identity.example.com/.well-known/openid-configuration",
     "client_id": "test-client-id",
     "client_secret": "test-client-secret",
-    "sds_url": SDS_URL,
+    "streams_url": STREAMS_URL,
 }
 
 STREAM_1_ID = "Random_1"
 STREAM_2_ID = "Random_2"
 
-# Minimal SDS definitions that load_settings() will return for each JSON file
-SDS_TYPE_DEF = {"id": "TimeIndexed.Double"}
-SDS_STREAM_1_DEF = {"id": STREAM_1_ID}
-SDS_STREAM_2_DEF = {"id": STREAM_2_ID}
+# Minimal Streams definitions that load_settings() will return for each JSON file
+STREAMS_TYPE_DEF = {"id": "TimeIndexed.Double"}
+STREAMS_STREAM_1_DEF = {"id": STREAM_1_ID}
+STREAMS_STREAM_2_DEF = {"id": STREAM_2_ID}
 
 # Two fake time-series data points used as server responses
 FAKE_POINTS = [
@@ -144,7 +144,6 @@ class TestSettingsLoading:
     @pytest.mark.parametrize(
         "override, expected_message",
         [
-            ({"well_known_url": ""}, "Set well_known_url"),
             ({"client_id": ""}, "Set client_id and client_secret"),
             ({"client_secret": ""}, "Set client_id and client_secret"),
             ({"account_id": ""}, "Set account_id and data_store_id"),
@@ -154,7 +153,6 @@ class TestSettingsLoading:
     )
     def test_load_runtime_settings_required_fields(self, tmp_path, override, expected_message, capsys):
         settings = {
-            "well_known_url": "https://identity.example.com/.well-known/openid-configuration",
             "client_id": "cid",
             "client_secret": "secret",
             "account_id": "acct-id",
@@ -168,9 +166,8 @@ class TestSettingsLoading:
             prog.load_runtime_settings(settings_path)
         assert expected_message in capsys.readouterr().err
 
-    def test_load_runtime_settings_builds_sds_url(self, tmp_path):
+    def test_load_runtime_settings_builds_streams_url(self, tmp_path):
         settings = {
-            "well_known_url": "https://identity.example.com/.well-known/openid-configuration",
             "client_id": "cid",
             "client_secret": "secret",
             "account_id": "acct-id",
@@ -181,7 +178,10 @@ class TestSettingsLoading:
 
         runtime = prog.load_runtime_settings(settings_path)
 
-        assert runtime["sds_url"] == "https://platform.connect.aveva.com/api/account/acct-id/sds/store-id/v2"
+        assert runtime["well_known_url"] == (
+            "https://identity.platform.connect.aveva.com/account/acct-id/authentication/.well-known/openid-configuration"
+        )
+        assert runtime["streams_url"] == "https://platform.connect.aveva.com/api/account/acct-id/sds/store-id/v2"
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ class TestGetData:
         body = {"items": FAKE_POINTS}
 
         with patch("requests.get", return_value=_ok_response(body)):
-            result = prog.get_data(FAKE_TOKEN, f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b")
+            result = prog.get_data(FAKE_TOKEN, f"{STREAMS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b")
 
         assert result == {"items": FAKE_POINTS}
 
@@ -236,13 +236,13 @@ class TestGetData:
         page2 = {"items": [FAKE_POINTS[1]]}
 
         with patch("requests.get", side_effect=[_ok_response(page1), _ok_response(page2)]):
-            result = prog.get_data(FAKE_TOKEN, f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b")
+            result = prog.get_data(FAKE_TOKEN, f"{STREAMS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b")
 
         assert result == {"items": FAKE_POINTS}
 
     def test_adds_count_when_initial_url_has_no_query(self):
         with patch("Program.get", return_value=_ok_response({"items": []})) as mock_get:
-            prog.get_data(FAKE_TOKEN, f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window", count=250)
+            prog.get_data(FAKE_TOKEN, f"{STREAMS_URL}/Streams/{STREAM_1_ID}/Data/Window", count=250)
 
         called_url = mock_get.call_args[0][1]
         assert called_url.endswith("?count=250")
@@ -251,7 +251,7 @@ class TestGetData:
         with patch("Program.get", return_value=_ok_response({"items": []})) as mock_get:
             prog.get_data(
                 FAKE_TOKEN,
-                f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b",
+                f"{STREAMS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b",
                 count=250,
             )
 
@@ -265,7 +265,7 @@ class TestGetData:
         with patch("Program.get", side_effect=[_ok_response(page1), _ok_response(page2)]) as mock_get:
             result = prog.get_data(
                 FAKE_TOKEN,
-                f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b",
+                f"{STREAMS_URL}/Streams/{STREAM_1_ID}/Data/Window?startIndex=a&endIndex=b",
                 count=42,
             )
 
@@ -282,7 +282,7 @@ class TestGetData:
         mock_resp.raise_for_status.side_effect = req.HTTPError("500")
 
         with patch("requests.get", return_value=mock_resp), pytest.raises(SystemExit):
-            prog.get_data(FAKE_TOKEN, f"{SDS_URL}/Streams/{STREAM_1_ID}/Data/Window")
+            prog.get_data(FAKE_TOKEN, f"{STREAMS_URL}/Streams/{STREAM_1_ID}/Data/Window")
 
 
 class TestPostForData:
@@ -293,7 +293,7 @@ class TestPostForData:
         with patch("Program.post", return_value=mock_resp):
             result = prog.post_for_data(
                 FAKE_TOKEN,
-                f"{SDS_URL}/Bulk/Streams/Data/Sampled",
+                f"{STREAMS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID]},
             )
 
@@ -314,7 +314,7 @@ class TestPostForData:
         with patch("Program.post", return_value=mock_resp):
             result = prog.post_for_data(
                 FAKE_TOKEN,
-                f"{SDS_URL}/Bulk/Streams/Data/Sampled",
+                f"{STREAMS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID, STREAM_2_ID]},
             )
 
@@ -350,7 +350,7 @@ class TestPostForData:
         with patch("Program.post", side_effect=fail_then_succeed):
             result = prog.post_for_data(
                 FAKE_TOKEN,
-                f"{SDS_URL}/Bulk/Streams/Data/Sampled",
+                f"{STREAMS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID, STREAM_2_ID]},
             )
 
@@ -373,7 +373,7 @@ class TestPostForData:
         with patch("Program.post", side_effect=[page1, page2]) as mock_post:
             result = prog.post_for_data(
                 FAKE_TOKEN,
-                f"{SDS_URL}/Bulk/Streams/Data/Sampled",
+                f"{STREAMS_URL}/Bulk/Streams/Data/Sampled",
                 {"ids": [STREAM_1_ID, STREAM_2_ID]},
             )
 
@@ -399,7 +399,7 @@ class TestEndToEnd:
     def _make_post_side_effect(self):
         """
         Returns a callable used as side_effect for requests.post.
-        The first call is the token request; all subsequent calls are SDS writes
+        The first call is the token request; all subsequent calls are Streams writes
         (type, streams, data).
         """
         calls = {"n": 0}
@@ -409,7 +409,7 @@ class TestEndToEnd:
             if calls["n"] == 1:
                 # Token endpoint
                 return _ok_response({"access_token": FAKE_TOKEN})
-            # SDS POST (type / streams)
+            # Streams POST (type / streams)
             return _ok_response({})
 
         return _post
@@ -420,7 +420,6 @@ class TestEndToEnd:
 
         # Write minimal settings file
         settings = {
-            "well_known_url": "https://identity.example.com/.well-known/openid-configuration",
             "client_id": "cid",
             "client_secret": "secret",
             "account_id": "acct-id",
@@ -430,10 +429,10 @@ class TestEndToEnd:
         settings_path = tmp_path / "appsettings.json"
         settings_path.write_text(json.dumps(settings))
 
-        # Write minimal SDS JSON files
-        (tmp_path / "SDSType.json").write_text(json.dumps(SDS_TYPE_DEF))
-        (tmp_path / "SDSStream1.json").write_text(json.dumps(SDS_STREAM_1_DEF))
-        (tmp_path / "SDSStream2.json").write_text(json.dumps(SDS_STREAM_2_DEF))
+        # Write minimal Stream JSON files
+        (tmp_path / "StreamType.json").write_text(json.dumps(STREAMS_TYPE_DEF))
+        (tmp_path / "Stream1.json").write_text(json.dumps(STREAMS_STREAM_1_DEF))
+        (tmp_path / "Stream2.json").write_text(json.dumps(STREAMS_STREAM_2_DEF))
 
         # Point Path(__file__) lookups at tmp_path
         monkeypatch.setattr(prog, "DEFAULT_SETTINGS_PATH", settings_path)
@@ -488,22 +487,22 @@ class TestEndToEnd:
                 )
                 assert token == FAKE_TOKEN
 
-                prog.get_or_create_streams_type(token, runtime_settings)
-                prog.get_or_create_stream(token, runtime_settings, "SDSStream1.json")
-                prog.get_or_create_stream(token, runtime_settings, "SDSStream2.json")
+                prog.get_or_create_streams_type(token, runtime_settings, STREAMS_TYPE_DEF)
+                prog.get_or_create_stream(token, runtime_settings, STREAMS_STREAM_1_DEF)
+                prog.get_or_create_stream(token, runtime_settings, STREAMS_STREAM_2_DEF)
                 prog.backfill_stream_data(token, runtime_settings, STREAM_1_ID)
                 prog.backfill_stream_data(token, runtime_settings, STREAM_2_ID)
 
                 raw_data = prog.get_data(
                     token,
-                    f"{runtime_settings['sds_url']}/Streams/{STREAM_1_ID}/Data/Window"
+                    f"{runtime_settings['streams_url']}/Streams/{STREAM_1_ID}/Data/Window"
                     f"?startIndex={prog.DATA_BACKFILL_START_TIME}&endIndex={prog.DATA_BACKFILL_END_TIME}",
                 )
                 assert len(raw_data["items"]) == len(FAKE_POINTS)
 
                 interp_data = prog.get_data(
                     token,
-                    f"{runtime_settings['sds_url']}/Streams/{STREAM_2_ID}/Data/Interpolated/Interval"
+                    f"{runtime_settings['streams_url']}/Streams/{STREAM_2_ID}/Data/Interpolated/Interval"
                     f"?startIndex={prog.DATA_BACKFILL_START_TIME}&endIndex={prog.DATA_BACKFILL_END_TIME}&count=2",
                 )
                 assert len(interp_data["items"]) == len(FAKE_POINTS)
