@@ -25,7 +25,6 @@ from typing import Any, NoReturn
 import requests
 
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
@@ -458,17 +457,28 @@ def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: st
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-    # Set a consistent plotting theme for readability.
-    sns.set_theme(style="whitegrid")
-
     # Create a wider plotting window for better date readability.
     fig, ax = plt.subplots(figsize=(14, 6))
 
+    # Use a simple matplotlib grid and a stable color cycle for stream separation.
+    ax.grid(True, linestyle='--', alpha=0.3)
+    color_cycle = plt.get_cmap('tab10').colors
+
     # Plot one or many series depending on whether stream_id is present.
     if 'stream_id' in df.columns:
-        sns.lineplot(data=df, x='timestamp', y='value', hue='stream_id', marker='o', ax=ax)
+        for index, (stream_id, group) in enumerate(df.groupby('stream_id', sort=False)):
+            series = group.sort_values('timestamp') if 'timestamp' in group.columns else group
+            ax.plot(
+                series['timestamp'],
+                series['value'],
+                marker='o',
+                label=str(stream_id),
+                color=color_cycle[index % len(color_cycle)],
+            )
+        ax.legend(title='stream_id')
     else:
-        sns.lineplot(data=df, x='timestamp', y='value', marker='o', ax=ax)
+        ordered = df.sort_values('timestamp') if 'timestamp' in df.columns else df
+        ax.plot(ordered['timestamp'], ordered['value'], marker='o')
 
     # Reduce axis crowding by auto-selecting fewer date ticks.
     locator = mdates.AutoDateLocator(minticks=4, maxticks=16)
