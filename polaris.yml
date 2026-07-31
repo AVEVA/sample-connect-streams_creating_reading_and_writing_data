@@ -10,6 +10,8 @@ project:
   revision:
     name: ${scm.git.commit}
     date: ${scm.git.commit.date}
+  groups:
+    .RnD.Polaris.Guild-Product-Readiness: Administrator
 capture:
   fileSystem:
     python:
