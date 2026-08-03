@@ -24,6 +24,7 @@ from typing import Any, NoReturn
 
 import requests
 
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
@@ -436,23 +437,26 @@ def read_sampled_bulk_stream_data(
 # VISUALIZATION & DISPLAY
 # ============================================================================
 
-def _coerce_timestamp(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return parse_iso_datetime(value.strip())
-        except ValueError:
-            return value
-    return value
-
-
-def _extract_timestamp_and_value(point: dict[str, Any]) -> tuple[Any, Any]:
-    timestamp = point.get("timestamp", point.get("Timestamp"))
-    value = point.get("value", point.get("Value"))
-    return _coerce_timestamp(timestamp), value
-
 def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: str) -> None:
+    # Handle dict with multiple streams or list of data points
+    if isinstance(data, dict):
+        # Convert dict of streams to a list with stream_id column
+        all_data_points = []
+        for stream_id, data_points in data.items():
+            for point in data_points:
+                point_copy = point.copy()
+                point_copy['stream_id'] = stream_id
+                all_data_points.append(point_copy)
+        df = pd.DataFrame(all_data_points)
+    else:
+        # Handle single stream list of data points
+        df = pd.DataFrame(data)
+
+    # Normalise columns and coerce timestamp to datetime for plotting.
+    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+
     # Create a wider plotting window for better date readability.
     fig, ax = plt.subplots(figsize=(14, 6))
 
@@ -460,36 +464,21 @@ def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: st
     ax.grid(True, linestyle='--', alpha=0.3)
     color_cycle = plt.get_cmap('tab10').colors
 
-    # Plot one or many series depending on whether stream_id buckets are provided.
-    if isinstance(data, dict):
-        for index, (stream_id, data_points) in enumerate(data.items()):
-            series = []
-            for point in data_points:
-                timestamp, value = _extract_timestamp_and_value(point)
-                series.append((timestamp, value))
-
-            series.sort(key=lambda item: item[0])
-            timestamps = [item[0] for item in series]
-            values = [item[1] for item in series]
+    # Plot one or many series depending on whether stream_id is present.
+    if 'stream_id' in df.columns:
+        for index, (stream_id, group) in enumerate(df.groupby('stream_id', sort=False)):
+            series = group.sort_values('timestamp') if 'timestamp' in group.columns else group
             ax.plot(
-                timestamps,
-                values,
+                series['timestamp'],
+                series['value'],
                 marker='o',
                 label=str(stream_id),
                 color=color_cycle[index % len(color_cycle)],
             )
-
         ax.legend(title='stream_id')
     else:
-        series = []
-        for point in data:
-            timestamp, value = _extract_timestamp_and_value(point)
-            series.append((timestamp, value))
-
-        series.sort(key=lambda item: item[0])
-        timestamps = [item[0] for item in series]
-        values = [item[1] for item in series]
-        ax.plot(timestamps, values, marker='o')
+        ordered = df.sort_values('timestamp') if 'timestamp' in df.columns else df
+        ax.plot(ordered['timestamp'], ordered['value'], marker='o')
 
     # Reduce axis crowding by auto-selecting fewer date ticks.
     locator = mdates.AutoDateLocator(minticks=4, maxticks=16)
@@ -505,31 +494,28 @@ def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: st
 
 
 def table(data: list[dict[str, Any]], title: str) -> None:
-    # Normalize stream payload rows to timestamp/value columns.
-    normalized_rows: list[list[str]] = []
-    for point in data:
-        timestamp, value = _extract_timestamp_and_value(point)
-        if isinstance(timestamp, datetime):
-            timestamp_text = timestamp.isoformat().replace("+00:00", "Z")
-        else:
-            timestamp_text = str(timestamp)
-        normalized_rows.append([timestamp_text, str(value)])
+    # Convert data to dataframe.
+    df = pd.DataFrame(data)
+
+    # Normalise column names, then convert timestamp.
+    df = df.rename(columns={c: c.lower() for c in ['Timestamp', 'Value'] if c in df.columns})
+    if 'timestamp' in df.columns:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
 
     # Limit displayed rows for large datasets to keep the table legible.
     max_rows_per_page = 20
-    total_rows = len(normalized_rows)
+    total_rows = len(df)
     
     if total_rows > max_rows_per_page:
         # Display first page for large tables
-        table_rows = normalized_rows[:max_rows_per_page]
+        df_display = df.head(max_rows_per_page)
         title_text = f"Table (showing {max_rows_per_page} of {total_rows} rows)"
     else:
-        table_rows = normalized_rows
+        df_display = df
         title_text = "Table"
     
     # Scale figure dimensions with table size.
-    n_rows = len(table_rows)
-    n_cols = 2
+    n_rows, n_cols = df_display.shape
     fig_height = max(8, 0.3 * (n_rows + 1) + 1)  # +1 for header row
     fig_width = max(12, n_cols * 1.5)
     
@@ -540,8 +526,8 @@ def table(data: list[dict[str, Any]], title: str) -> None:
     fig.canvas.manager.set_window_title(title)
     
     table_obj = ax.table(
-        cellText=table_rows,
-        colLabels=["timestamp", "value"],
+        cellText=df_display.values,
+        colLabels=df_display.columns,
         cellLoc='left',
         loc='center'
     )
