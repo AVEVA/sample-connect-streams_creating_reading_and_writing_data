@@ -155,11 +155,12 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     # Validate required auth and endpoint configuration values.
     settings = load_settings(settings_path)
 
-    client_id = settings.get("client_id")
-    client_secret = settings.get("client_secret")
-    account_id = settings.get("account_id")
-    data_store_id = settings.get("data_store_id")
-    base_url = settings.get("base_url")
+    client_id = settings.get("ClientId")
+    client_secret = settings.get("ClientSecret")
+    account_id = settings.get("AccountId")
+    data_store_id = settings.get("DataStoreId")
+    resource = settings.get("Resource")
+    scope = settings.get("Scope","api")
 
     if not client_id or not client_secret:
         fail("Set client_id and client_secret in appsettings.json.")
@@ -167,19 +168,20 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     if not account_id or not data_store_id:
         fail("Set account_id and data_store_id in appsettings.json.")
 
-    if not base_url:
-        fail("Set base_url to the full CONNECT Data Services endpoint URL in appsettings.json.")
+    if not resource:
+        fail("Set resource to the full CONNECT Data Services endpoint URL in appsettings.json.")
 
     cleaned_account_id = account_id.removesuffix("/")
-    cleaned_base_url = base_url.removeprefix("https://")
-    well_known_url = f"https://identity.{cleaned_base_url}/account/{cleaned_account_id}/authentication/.well-known/openid-configuration"
-    streams_url = f"https://{cleaned_base_url}/api/account/{cleaned_account_id}/sds/{data_store_id}/v2"
+    cleaned_resource = resource.removeprefix("https://")
+    well_known_url = f"https://identity.{cleaned_resource}/account/{cleaned_account_id}/authentication/.well-known/openid-configuration"
+    streams_url = f"https://{cleaned_resource}/{scope}/account/{cleaned_account_id}/sds/{data_store_id}/v2"
 
     return {
         "well_known_url": well_known_url,
         "client_id": client_id,
         "client_secret": client_secret,
-        "streams_url" : streams_url
+        "streams_url" : streams_url,
+        "scope": scope
     }
 
 
@@ -316,7 +318,7 @@ def get_data(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
     continuation_token = None
     
     while True:
-        # Rebuild each request URL from the original base URL so pagination state is explicit.
+        # Rebuild each request URL from the original resource URL so pagination state is explicit.
         request_url = url
         if continuation_token:
             separator = "&" if "?" in request_url else "?"
@@ -561,7 +563,7 @@ if __name__ == "__main__":
         well_known_url=runtime_settings["well_known_url"],
         client_id=runtime_settings["client_id"],
         client_secret=runtime_settings["client_secret"],
-        scope="api",
+        scope=runtime_settings["scope"]
     )
 
     # Step 3. Get type definition and send to CONNECT.

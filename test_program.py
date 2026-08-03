@@ -144,20 +144,21 @@ class TestSettingsLoading:
     @pytest.mark.parametrize(
         "override, expected_message",
         [
-            ({"client_id": ""}, "Set client_id and client_secret"),
-            ({"client_secret": ""}, "Set client_id and client_secret"),
-            ({"account_id": ""}, "Set account_id and data_store_id"),
-            ({"data_store_id": ""}, "Set account_id and data_store_id"),
-            ({"base_url": ""}, "Set base_url"),
+            ({"ClientId": ""}, "Set client_id and client_secret"),
+            ({"ClientSecret": ""}, "Set client_id and client_secret"),
+            ({"AccountId": ""}, "Set account_id and data_store_id"),
+            ({"DataStoreId": ""}, "Set account_id and data_store_id"),
+            ({"Resource": ""}, "Set resource"),
         ],
     )
     def test_load_runtime_settings_required_fields(self, tmp_path, override, expected_message, capsys):
         settings = {
-            "client_id": "cid",
-            "client_secret": "secret",
-            "account_id": "acct-id",
-            "data_store_id": "store-id",
-            "base_url": "https://platform.connect.aveva.com",
+            "ClientId": "cid",
+            "ClientSecret": "secret",
+            "AccountId": "acct-id",
+            "DataStoreId": "store-id",
+            "Resource": "https://platform.connect.aveva.com",
+            "Scope": "api"
         }
         settings.update(override)
         settings_path = self._write_json(tmp_path, "appsettings.json", settings)
@@ -168,11 +169,12 @@ class TestSettingsLoading:
 
     def test_load_runtime_settings_builds_streams_url(self, tmp_path):
         settings = {
-            "client_id": "cid",
-            "client_secret": "secret",
-            "account_id": "acct-id",
-            "data_store_id": "store-id",
-            "base_url": "https://platform.connect.aveva.com",
+            "ClientId": "cid",
+            "ClientSecret": "secret",
+            "AccountId": "acct-id",
+            "DataStoreId": "store-id",
+            "Resource": "https://platform.connect.aveva.com",
+            "Scope": "api"
         }
         settings_path = self._write_json(tmp_path, "appsettings.json", settings)
 
@@ -420,11 +422,12 @@ class TestEndToEnd:
 
         # Write minimal settings file
         settings = {
-            "client_id": "cid",
-            "client_secret": "secret",
-            "account_id": "acct-id",
-            "data_store_id": "dev-store",
-            "base_url": "https://platform.connect.aveva.com",
+            "ClientId": "cid",
+            "ClientSecret": "secret",
+            "AccountId": "acct-id",
+            "DataStoreId": "dev-store",
+            "Resource": "https://platform.connect.aveva.com",
+            "Scope": "api"
         }
         settings_path = tmp_path / "appsettings.json"
         settings_path.write_text(json.dumps(settings))
@@ -483,7 +486,7 @@ class TestEndToEnd:
                     well_known_url=runtime_settings["well_known_url"],
                     client_id=runtime_settings["client_id"],
                     client_secret=runtime_settings["client_secret"],
-                    scope="api",
+                    scope=runtime_settings["scope"],
                 )
                 assert token == FAKE_TOKEN
 
