@@ -29,7 +29,7 @@ To Test the Sample:
 Here is a high level overview of the steps performed by this sample:
 
 1. Load settings from appsettings.json
-1. Get bearer token from token endpoint found in the well-known url provided
+1. Get bearer token from token endpoint found in the well-known url based on the resource provided
 1. Get or create Stream Type defined in StreamType.json
 1. Get or create two streams defined in Stream1.json and Stream2.json
 1. Generate and backfill random data for Stream1 at the backfill start, end and interval provided in the globals
@@ -46,11 +46,12 @@ The values to be replaced are in `appsettings.json`:
 
 ```json
 {
-  "client_id": "your-client-id",
-  "client_secret": "your-client-secret",
-  "account_id": "your-account-id",
-  "data_store_id": "your-data-store-id",
-  "base_url": "https://platform.connect.aveva.com"
+  "Resource": "https://platform.connect.aveva.com",
+  "AccountId": "your-account-id",
+  "ClientId": "your-client-id",
+  "ClientSecret": "your-client-secret",
+  "Scope": "api",
+  "DataStoreId": "your-data-store-id"
 }
 ```
 To modify the stream creation, backfill and data read behaviour:
