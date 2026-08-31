@@ -1,3 +1,20 @@
+'''
+Copyright 2018-2026 AVEVA Group Limited
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+SPDX-License-Identifier: Apache-2.0
+'''
+
 import json
 import random
 import sys
@@ -8,13 +25,12 @@ from typing import Any, NoReturn
 import requests
 
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 DEFAULT_SETTINGS_PATH = Path(__file__).with_name("appsettings.json")
 DATA_BACKFILL_START_TIME = "2026-06-01T00:00:00Z"
-DATA_BACKFILL_END_TIME = "2026-06-29T00:00:00Z"
+DATA_BACKFILL_END_TIME = "2026-07-01T00:00:00Z"
 DATA_BACKFILL_INTERVAL = "01:00:00"
 DATA_READ_FILTER = ""
 DATA_READ_INTERVAL = "24:00:00"
@@ -24,14 +40,18 @@ DATA_READ_END_BOUNDARY_TYPE = "Inside"
 DATA_READ_SAMPLED_INTERVALS = 5
 
 
-def _parse_iso_datetime(value: str) -> datetime:
-    # Support common UTC suffix used in SDS payloads.
+# ============================================================================
+# PARSING & UTILITY FUNCTIONS
+# ============================================================================
+
+def parse_iso_datetime(value: str) -> datetime:
+    # Support common UTC suffix used in timestamp payloads.
     if value.endswith("Z"):
         value = f"{value[:-1]}+00:00"
     return datetime.fromisoformat(value)
 
 
-def _parse_hms_interval_to_timedelta(value: str) -> timedelta:
+def parse_hms_interval_to_timedelta(value: str) -> timedelta:
     # Supports H:MM:SS (for example 1:00:00).
     parts = value.split(":")
     if len(parts) != 3:
@@ -68,12 +88,12 @@ def calculate_interval_count(start_iso: str, end_iso: str, interval: str) -> int
         Number of intervals between start and end times (inclusive)
     """
     # Parse and validate timestamps before calculating sample count.
-    start = _parse_iso_datetime(start_iso.strip())
-    end = _parse_iso_datetime(end_iso.strip())
+    start = parse_iso_datetime(start_iso.strip())
+    end = parse_iso_datetime(end_iso.strip())
     if start > end:
         raise ValueError("time_range_iso start must be less than or equal to end")
     
-    step = _parse_hms_interval_to_timedelta(interval)
+    step = parse_hms_interval_to_timedelta(interval)
     time_range = end - start
     
     # Calculate the number of intervals (add 1 to include both start and end)
@@ -82,14 +102,14 @@ def calculate_interval_count(start_iso: str, end_iso: str, interval: str) -> int
     return interval_count
 
 
-def build_timeseries_data(start_iso: str, end_iso: str, interval: str) -> list[dict[str, Any]]:
+def generate_random_timeindexeddouble_data(start_iso: str, end_iso: str, interval: str) -> list[dict[str, Any]]:
     # Build deterministic timestamps and random values for stream backfill samples.
-    start = _parse_iso_datetime(start_iso.strip())
-    end = _parse_iso_datetime(end_iso.strip())
+    start = parse_iso_datetime(start_iso.strip())
+    end = parse_iso_datetime(end_iso.strip())
     if start > end:
         raise ValueError("time_range_iso start must be less than or equal to end")
 
-    step = _parse_hms_interval_to_timedelta(interval)
+    step = parse_hms_interval_to_timedelta(interval)
 
     data: list[dict[str, Any]] = []
     current = start
@@ -101,6 +121,10 @@ def build_timeseries_data(start_iso: str, end_iso: str, interval: str) -> list[d
 
     return data
 
+
+# ============================================================================
+# CONFIGURATION & SETTINGS
+# ============================================================================
 
 def fail(message: str, details: Any | None = None) -> NoReturn:
     print(message, file=sys.stderr)
@@ -131,15 +155,12 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     # Validate required auth and endpoint configuration values.
     settings = load_settings(settings_path)
 
-    well_known_url = settings.get("well_known_url")
-    client_id = settings.get("client_id")
-    client_secret = settings.get("client_secret")
-    account_id = settings.get("account_id")
-    data_store_id = settings.get("data_store_id")
-    base_url = settings.get("base_url")
-
-    if not well_known_url:
-        fail("Set well_known_url in appsettings.json.")
+    client_id = settings.get("ClientId")
+    client_secret = settings.get("ClientSecret")
+    account_id = settings.get("AccountId")
+    data_store_id = settings.get("DataStoreId")
+    resource = settings.get("Resource")
+    scope = settings.get("Scope","api")
 
     if not client_id or not client_secret:
         fail("Set client_id and client_secret in appsettings.json.")
@@ -147,18 +168,26 @@ def load_runtime_settings(settings_path: Path) -> dict[str, Any]:
     if not account_id or not data_store_id:
         fail("Set account_id and data_store_id in appsettings.json.")
 
-    if not base_url:
-        fail("Set base_url to the full CONNECT Data Services endpoint URL in appsettings.json.")
+    if not resource:
+        fail("Set resource to the full CONNECT Data Services endpoint URL in appsettings.json.")
 
-    sds_url = f"{base_url}/api/account/{account_id}/sds/{data_store_id}/v2"
+    cleaned_account_id = account_id.removesuffix("/")
+    cleaned_resource = resource.removeprefix("https://")
+    well_known_url = f"https://identity.{cleaned_resource}/account/{cleaned_account_id}/authentication/.well-known/openid-configuration"
+    streams_url = f"https://{cleaned_resource}/{scope}/account/{cleaned_account_id}/sds/{data_store_id}/v2"
 
     return {
         "well_known_url": well_known_url,
         "client_id": client_id,
         "client_secret": client_secret,
-        "sds_url" : sds_url
+        "streams_url" : streams_url,
+        "scope": scope
     }
 
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
 
 def get_access_token(
     well_known_url: str,
@@ -206,6 +235,10 @@ def get_access_token(
     return access_token
 
 
+# ============================================================================
+# HTTP REQUEST HELPERS
+# ============================================================================
+
 def get(access_token: str, url: str) -> requests.Response:
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -221,13 +254,71 @@ def get(access_token: str, url: str) -> requests.Response:
     return response
 
 
+def post(access_token: str, url: str, body: Any) -> requests.Response:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        fail("POST request failed.", exc)
+    
+    return response
+
+
+def put(access_token: str, url: str, body: Any) -> requests.Response:
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.put(url, headers=headers, json=body, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        fail("PUT request failed.", exc)
+    
+    return response
+
+
+# ============================================================================
+# Streams Store OPERATIONS
+# ============================================================================
+
+def get_or_create_streams_type(token: str, runtime_settings: dict[str, str], streams_type_body: str) -> dict[str, Any]:
+    # Upsert type definition so stream creation has a known schema.
+    streams_type_id = streams_type_body["id"]
+    response = post(token, f"{runtime_settings['streams_url']}/Types/{streams_type_id}", streams_type_body)
+    print("Streams type created or retrieved")
+    return response.json()
+
+
+def get_or_create_stream(token: str, runtime_settings: dict[str, str], streams_body: str) -> dict[str, Any]:
+    stream_id = streams_body["id"]
+    response = post(token, f"{runtime_settings['streams_url']}/Streams/{stream_id}", streams_body)
+    print("Stream created or retrieved")
+    return response.json()
+
+
+def backfill_stream_data(token: str, runtime_settings: dict[str, str], stream_id: str) -> None:
+    # Seed each stream with sample values across the configured time range.
+    data = generate_random_timeindexeddouble_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
+    put(token, f"{runtime_settings['streams_url']}/Streams/{stream_id}/Data", data)
+    print(f'Data backfilled to stream {stream_id}')
+
+
 def get_data(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
     # Read paginated results and flatten all pages into one items list.
     all_items = []
     continuation_token = None
     
     while True:
-        # Rebuild each request URL from the original base URL so pagination state is explicit.
+        # Rebuild each request URL from the original resource URL so pagination state is explicit.
         request_url = url
         if continuation_token:
             separator = "&" if "?" in request_url else "?"
@@ -254,35 +345,99 @@ def get_data(access_token: str, url: str, count: int = 1000) -> dict[str, Any]:
         
         # Continue to next page
 
-def post(access_token: str, url: str, body: Any) -> requests.Response:
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
 
-    try:
-        response = requests.post(url, headers=headers, json=body, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        fail("POST request failed.", exc)
+def post_for_data(
+    token: str,
+    url: str,
+    body: dict[str, Any],
+    max_retries: int = 3,
+) -> dict[str, Any]:
+    """Send POST request with pagination and retry logic for failed streams."""
+    # Collect combined results from all pages and retries.
+    all_data = {}
+    stream_ids_to_retry = body.get("ids", [])
+    retry_count = 0
     
-    return response
-
-def put(access_token: str, url: str, body: Any) -> requests.Response:
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.put(url, headers=headers, json=body, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        fail("PUT request failed.", exc)
+    while retry_count <= max_retries:
+        # Rebuild the request body from the current retry set so partial failures can be retried cleanly.
+        request_body = {"ids": stream_ids_to_retry}
+        
+        response = post(token, url, request_body)
+        response_data = response.json()
+        
+        # Handle 207 Multi-Status responses
+        if response.status_code == 207:
+            multi_status = response_data.get("multiStatus", [])
+            failed_stream_ids = []
+            
+            for status_item in multi_status:
+                if status_item.get("status") in [200, 201]:
+                    # Extract successful data
+                    if "data" in status_item:
+                        all_data.update(status_item["data"])
+                elif status_item.get("status") in [400, 401, 403, 404]:
+                    # Bad request, unauthorized, forbidden or not found. Do not retry.
+                    print(f"Error {status_item.get("status")}: {status_item.get("detail")} posting for data to stream {status_item.get("resourceId")}. Will not retry. {status_item.get("resolution")}")
+                else:
+                    # Collect failed stream IDs for retry while preserving successful results.
+                    resource_id = status_item.get("resourceId")
+                    if resource_id and retry_count < max_retries:
+                        failed_stream_ids.append(resource_id)
+                    else:
+                        print(f"Maximum retries for {resource_id}. Will not retry. Error {status_item.get("status")}: {status_item.get("detail")}. {status_item.get("resolution")}")
+            
+            # Retry failed streams if any
+            if failed_stream_ids:
+                stream_ids_to_retry = failed_stream_ids
+                retry_count += 1
+                continue
+            else:
+                # No more failed streams
+                break
+        else:
+            # Non-207 bulk reads return data in a normal result payload instead of per-stream statuses.
+            if "result" in response_data:
+                all_data.update(response_data["result"])
+            
+            # Check for continuation token (pagination)
+            continuation_token = response_data.get("continuationToken")
+            if continuation_token:
+                # Keep paging with the same stream set until continuation token is exhausted.
+                request_body["continuationToken"] = continuation_token
+                stream_ids_to_retry = body.get("ids", [])  # Reset to original IDs for next page
+                continue
+            else:
+                break
     
-    return response
+    return all_data
+
+
+def read_sampled_bulk_stream_data(
+    token: str,
+    runtime_settings: dict[str, str],
+    stream_ids: list[str],
+    intervals: int,
+) -> dict[str, Any]:
+    # Build bulk sampled-read endpoint and request body once for reuse.
+    body_bulk = {"ids": stream_ids}
+    url = (
+        f"{runtime_settings['streams_url']}/Bulk/Streams/Data/Sampled"
+        f"?startIndex={DATA_BACKFILL_START_TIME}"
+        f"&endIndex={DATA_BACKFILL_END_TIME}"
+        f"&intervals={intervals}"
+        f"&sampleBy=value"
+        f"&filter={DATA_READ_FILTER}"
+        f"&boundaryType={DATA_READ_BOUNDARY_TYPE}"
+        f"&startBoundaryType={DATA_READ_START_BOUNDARY_TYPE}"
+        f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
+    )
+    bulk_data = post_for_data(token, url, body_bulk)
+    return bulk_data
+
+
+# ============================================================================
+# VISUALIZATION & DISPLAY
+# ============================================================================
 
 def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: str) -> None:
     # Handle dict with multiple streams or list of data points
@@ -304,17 +459,28 @@ def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: st
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-    # Set a consistent plotting theme for readability.
-    sns.set_theme(style="whitegrid")
-
     # Create a wider plotting window for better date readability.
     fig, ax = plt.subplots(figsize=(14, 6))
 
+    # Use a simple matplotlib grid and a stable color cycle for stream separation.
+    ax.grid(True, linestyle='--', alpha=0.3)
+    color_cycle = plt.get_cmap('tab10').colors
+
     # Plot one or many series depending on whether stream_id is present.
     if 'stream_id' in df.columns:
-        sns.lineplot(data=df, x='timestamp', y='value', hue='stream_id', marker='o', ax=ax)
+        for index, (stream_id, group) in enumerate(df.groupby('stream_id', sort=False)):
+            series = group.sort_values('timestamp') if 'timestamp' in group.columns else group
+            ax.plot(
+                series['timestamp'],
+                series['value'],
+                marker='o',
+                label=str(stream_id),
+                color=color_cycle[index % len(color_cycle)],
+            )
+        ax.legend(title='stream_id')
     else:
-        sns.lineplot(data=df, x='timestamp', y='value', marker='o', ax=ax)
+        ordered = df.sort_values('timestamp') if 'timestamp' in df.columns else df
+        ax.plot(ordered['timestamp'], ordered['value'], marker='o')
 
     # Reduce axis crowding by auto-selecting fewer date ticks.
     locator = mdates.AutoDateLocator(minticks=4, maxticks=16)
@@ -327,6 +493,7 @@ def plot(data: dict[str, list[dict[str, Any]]] | list[dict[str, Any]], title: st
 
     # Display the chart
     plt.show()
+
 
 def table(data: list[dict[str, Any]], title: str) -> None:
     # Convert data to dataframe.
@@ -380,142 +547,45 @@ def table(data: list[dict[str, Any]], title: str) -> None:
     plt.tight_layout()
     plt.show()
 
-def get_or_create_sds_type(token: str, runtime_settings: dict[str, str]) -> dict[str, Any]:
-    # Upsert type definition so stream creation has a known schema.
-    sds_type_body = load_settings(Path(__file__).with_name("SDSType.json"))
-    sds_type_id = sds_type_body["id"]
-    response = post(token, f"{runtime_settings['sds_url']}/Types/{sds_type_id}", sds_type_body)
-    print("Sds type created or retrieved")
-    return response.json()
 
-def get_or_create_sds_stream(token: str, runtime_settings: dict[str, str], stream_filename: str) -> dict[str, Any]:
-    # Upsert stream definition from local JSON template.
-    sds_stream_body = load_settings(Path(__file__).with_name(stream_filename))
-    sds_stream_id = sds_stream_body["id"]
-    response = post(token, f"{runtime_settings['sds_url']}/Streams/{sds_stream_id}", sds_stream_body)
-    print("Sds stream created or retrieved")
-    return response.json()
-
-def backfill_stream_data(token: str, runtime_settings: dict[str, str], stream_id: str) -> None:
-    # Seed each stream with sample values across the configured time range.
-    data = build_timeseries_data(DATA_BACKFILL_START_TIME, DATA_BACKFILL_END_TIME, DATA_BACKFILL_INTERVAL)
-    put(token, f"{runtime_settings['sds_url']}/Streams/{stream_id}/Data", data)
-    print(f'Data backfilled to stream {stream_id}')
-
-def post_for_data(
-    token: str,
-    url: str,
-    body: dict[str, Any],
-    max_retries: int = 3,
-) -> dict[str, Any]:
-    """Send POST request with pagination and retry logic for failed streams."""
-    # Collect combined results from all pages and retries.
-    all_data = {}
-    stream_ids_to_retry = body.get("ids", [])
-    retry_count = 0
-    
-    while retry_count <= max_retries:
-        # Rebuild the request body from the current retry set so partial failures can be retried cleanly.
-        request_body = {"ids": stream_ids_to_retry}
-        
-        response = post(token, url, request_body)
-        response_data = response.json()
-        
-        # Handle 207 Multi-Status responses
-        if response.status_code == 207:
-            multi_status = response_data.get("multiStatus", [])
-            failed_stream_ids = []
-            
-            for status_item in multi_status:
-                if status_item.get("status") == 200:
-                    # Extract successful data
-                    if "data" in status_item:
-                        all_data.update(status_item["data"])
-                else:
-                    # Collect failed stream IDs for retry while preserving successful results.
-                    resource_id = status_item.get("resourceId")
-                    if resource_id and retry_count < max_retries:
-                        failed_stream_ids.append(resource_id)
-            
-            # Retry failed streams if any
-            if failed_stream_ids:
-                stream_ids_to_retry = failed_stream_ids
-                retry_count += 1
-                continue
-            else:
-                # No more failed streams
-                break
-        else:
-            # Non-207 bulk reads return data in a normal result payload instead of per-stream statuses.
-            if "result" in response_data:
-                all_data.update(response_data["result"])
-            
-            # Check for continuation token (pagination)
-            continuation_token = response_data.get("continuationToken")
-            if continuation_token:
-                # Keep paging with the same stream set until continuation token is exhausted.
-                request_body["continuationToken"] = continuation_token
-                stream_ids_to_retry = body.get("ids", [])  # Reset to original IDs for next page
-                continue
-            else:
-                break
-    
-    return all_data
-
-def read_sampled_bulk_stream_data(
-    token: str,
-    runtime_settings: dict[str, str],
-    stream_ids: list[str],
-    intervals: int,
-) -> dict[str, Any]:
-    # Build bulk sampled-read endpoint and request body once for reuse.
-    body_bulk = {"ids": stream_ids}
-    url = (
-        f"{runtime_settings['sds_url']}/Bulk/Streams/Data/Sampled"
-        f"?startIndex={DATA_BACKFILL_START_TIME}"
-        f"&endIndex={DATA_BACKFILL_END_TIME}"
-        f"&intervals={intervals}"
-        f"&sampleBy=value"
-        f"&filter={DATA_READ_FILTER}"
-        f"&boundaryType={DATA_READ_BOUNDARY_TYPE}"
-        f"&startBoundaryType={DATA_READ_START_BOUNDARY_TYPE}"
-        f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
-    )
-    bulk_data = post_for_data(token, url, body_bulk)
-    return bulk_data
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
-    # End-to-end sample flow: authenticate, provision assets, write data, then read/visualize it.
+    # End-to-end sample flow: authenticate, provision streams, write data, then read/visualize it.
 
-    # Load settings from appsettings.json.
+    # Step 1. Load settings from appsettings.json.
     runtime_settings = load_runtime_settings(DEFAULT_SETTINGS_PATH)
 
-    # Get token from token endpoint found in well-known url.
+    # Step 2. Get token from token endpoint found in well-known url.
     token = get_access_token(
         well_known_url=runtime_settings["well_known_url"],
         client_id=runtime_settings["client_id"],
         client_secret=runtime_settings["client_secret"],
-        scope="api",
+        scope=runtime_settings["scope"]
     )
 
-    # Get sds type definition and send to CONNECT.
-    sds_type = get_or_create_sds_type(token, runtime_settings)
+    # Step 3. Get type definition and send to CONNECT.
+    streams_type = get_or_create_streams_type(token, runtime_settings, load_settings(Path(__file__).with_name("StreamType.json")))
 
-    # Get sds stream 1 definition and send to CONNECT.
-    sds_stream_1 = get_or_create_sds_stream(token, runtime_settings, "SDSStream1.json")
+    # Step 4. Get stream 1 definition and send to CONNECT.
+    stream_1 = get_or_create_stream(token, runtime_settings, load_settings(Path(__file__).with_name("Stream1.json")))
 
-    # Get sds stream 2 definition and send to CONNECT.
-    sds_stream_2 = get_or_create_sds_stream(token, runtime_settings, "SDSStream2.json")
+    # Get stream 2 definition and send to CONNECT.
+    stream_2 = get_or_create_stream(token, runtime_settings, load_settings(Path(__file__).with_name("Stream2.json")))
 
-    # Backfill data into streams.
-    backfill_stream_data(token, runtime_settings, sds_stream_1['id'])
-    backfill_stream_data(token, runtime_settings, sds_stream_2['id'])
+    # Step 5. Backfill data into stream 1.
+    backfill_stream_data(token, runtime_settings, stream_1['id'])
 
-    # Read and show stored data for singular stream in time window.
+    # Step 6. Backfill data into stream 2.
+    backfill_stream_data(token, runtime_settings, stream_2['id'])
+
+    # Step 7. Read and show stored data for stream 1 in time window.
     raw_data = get_data(
         token,
         (
-            f"{runtime_settings['sds_url']}/Streams/{sds_stream_1['id']}/Data/Window"
+            f"{runtime_settings['streams_url']}/Streams/{stream_1['id']}/Data/Window"
             f"?startIndex={DATA_BACKFILL_START_TIME}"
             f"&endIndex={DATA_BACKFILL_END_TIME}"
             f"&filter={DATA_READ_FILTER}"
@@ -524,22 +594,22 @@ if __name__ == "__main__":
             f"&endBoundaryType={DATA_READ_END_BOUNDARY_TYPE}"
         ),
     )
-    table(raw_data["items"], f"Raw data for {sds_stream_1['id']}")
+    table(raw_data["items"], f"Raw data for {stream_1['id']}")
 
-    # Read and show interpolated data for a singular stream in time window.
+    # Step 8. Read and show interpolated data for stream 2 in time window.
     interpolated_data = get_data(
         token,
         (
-            f"{runtime_settings['sds_url']}/Streams/{sds_stream_2['id']}/Data/Interpolated/Interval"
+            f"{runtime_settings['streams_url']}/Streams/{stream_2['id']}/Data/Interpolated/Interval"
             f"?startIndex={DATA_BACKFILL_START_TIME}"
             f"&endIndex={DATA_BACKFILL_END_TIME}"
             f"&count={calculate_interval_count(DATA_BACKFILL_START_TIME,DATA_BACKFILL_END_TIME,DATA_READ_INTERVAL)}"
         ),
     )
-    table(interpolated_data["items"], f"Interpolated data for {sds_stream_2['id']}")
+    table(interpolated_data["items"], f"Interpolated data for {stream_2['id']}")
 
-    # Read and plot stored data for streams in bulk in time window.
-    bulk_data = read_sampled_bulk_stream_data(token, runtime_settings, [sds_stream_1['id'], sds_stream_2['id']], DATA_READ_SAMPLED_INTERVALS)
+    # Step 9. Read and plot stored data for streams in bulk in time window.
+    bulk_data = read_sampled_bulk_stream_data(token, runtime_settings, [stream_1['id'], stream_2['id']], DATA_READ_SAMPLED_INTERVALS)
     plot(bulk_data, "Sampled Data")
 
     input("Press Enter to exit...")
